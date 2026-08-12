@@ -1,0 +1,18 @@
+# Derived, never committed (PLAYBOOK §5): the depot is a copy, the sources are the truth.
+pkg/
+*.clapp
+*.clapp.sha256
+
+# Rust
+target/
+
+# Node / Vite
+node_modules/
+dist/
+
+# The provisioned artifacts — model weights and the corpus index are downloaded,
+# not committed. The builder writes them here while working.
+tools/build-index/work/
+tools/build-index/out/
+*.safetensors
+*.onnx

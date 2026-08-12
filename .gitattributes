@@ -1,0 +1,19 @@
+# PLAYBOOK §9: checkout with CRLF and every bash script dies on `\r`. Authoring happens
+# on Windows here, so this file is not optional.
+* text=auto eol=lf
+
+# ...and the same rule must never touch a binary.
+*.png binary
+*.ico binary
+*.icns binary
+*.jpg binary
+*.webp binary
+*.pdf binary
+*.docx binary
+*.xlsx binary
+*.safetensors binary
+*.onnx binary
+*.bin binary
+*.woff binary
+*.woff2 binary
+*.ttf binary

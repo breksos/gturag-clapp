@@ -1,0 +1,4 @@
+[submodule "clappkit"]
+	path = clappkit
+	url = https://github.com/arfium/clappkit.git
+	branch = main
