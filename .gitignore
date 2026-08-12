@@ -6,6 +6,9 @@ pkg/
 # Rust
 target/
 
+# Tauri regenerates these from tauri.conf.json on every build.
+src-tauri/gen/
+
 # Node / Vite
 node_modules/
 dist/
@@ -16,3 +19,8 @@ tools/build-index/work/
 tools/build-index/out/
 *.safetensors
 *.onnx
+
+# The built index is a RELEASE asset, not a source. It is derived from the live Formlar
+# page plus the model, both reproducible via tools/build-index — committing 15 MB of
+# float32 that changes wholesale on every rebuild is what git is worst at.
+corpus.gtu

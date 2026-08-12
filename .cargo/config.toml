@@ -1,0 +1,11 @@
+# clappkit declares the four clatch crates over `ssh://git@github.com/arfium/clatch.git`.
+# libgit2 cannot use this machine's ssh-agent, and cargo says so itself in the failure it
+# prints — so let cargo spawn the real git CLI instead.
+[net]
+git-fetch-with-cli = true
+
+# The other half of that story lives in scripts/with-clatch-deps.*, NOT here. The same
+# repository is public over HTTPS, so a `url.<https>.insteadOf <ssh>` rewrite is all a
+# keyless machine needs — but cargo's `[env]` table does not reach the `git` child cargo
+# spawns (measured, not assumed), so the rewrite has to arrive in the environment. Run
+# builds through the wrapper, or hold an SSH key for that remote and ignore all of this.

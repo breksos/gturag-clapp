@@ -1,0 +1,144 @@
+# Push a v* tag and this builds one .clapp per platform and publishes them.
+#
+# PLAYBOOK §6: distribution is a tag, not a folder. A .clapp is per-OS-arch, so a release
+# is one depot per platform, each carrying its own rewritten `connector.cliBin`.
+#
+# Note what this workflow does NOT need: a secret. clappkit pins the clatch crates over
+# SSH, and the reflex is a deploy key in `secrets.*` — which then cannot be used in a
+# job-level `if:`, which is how people end up writing a `gate` job to work around it
+# (PLAYBOOK §8). The repository is public over HTTPS, so one `insteadOf` rewrite in the
+# environment replaces the whole credentials problem.
+
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+  GIT_CONFIG_COUNT: "1"
+  GIT_CONFIG_KEY_0: url.https://github.com/arfium/clatch.git.insteadOf
+  GIT_CONFIG_VALUE_0: ssh://git@github.com/arfium/clatch.git
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+          - os: macos-latest
+            target: aarch64-apple-darwin
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive   # clappkit is the foundation, not an optional extra
+
+      - name: Assert an MSVC host on Windows
+        if: runner.os == 'Windows'
+        shell: bash
+        # WebView2: the MSVC toolchain links the LOADER statically, so the depot ships zero
+        # DLLs. A -gnu host would need WebView2Loader.dll beside the exe, and the failure
+        # is silent (PLAYBOOK §9).
+        run: |
+          rustc -vV | grep -q 'host: .*-msvc' || { echo "not an MSVC host"; exit 1; }
+
+      - name: Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          # rust-cache does not save on a failed run, so a build that dies never seeds a
+          # cache and the next attempt starts from zero — which is most of why a cold
+          # Windows build is ~15 minutes (PLAYBOOK §9).
+          cache-on-failure: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Windows Defender exclusions
+        if: runner.os == 'Windows'
+        shell: pwsh
+        # Defender scans all ~100k files rustc writes; excluding the workspace and the
+        # toolchain is worth roughly a third of the build time on a throwaway VM.
+        run: |
+          Add-MpPreference -ExclusionPath "${{ github.workspace }}","$HOME\.cargo","$HOME\.rustup" -ErrorAction SilentlyContinue
+
+      - run: npm ci
+
+      - name: Package
+        shell: bash
+        # `npm run <script>` spawns cmd.exe on Windows, which cannot run a .sh file — so
+        # call bash directly rather than going through the npm script (PLAYBOOK §9).
+        run: bash scripts/package.sh
+
+      - name: Smoke-test the CLI role
+        shell: bash
+        # Windows resolves a PE's imports at process start, so an exe with an unsatisfied
+        # dependency cannot print --help at all. And `status` MUST fail with the app's own
+        # sentence — that proves the CLI got as far as dialling its socket, i.e. the
+        # two-surface wiring survived packaging.
+        run: |
+          CLI_BIN=$(node -p "require('./pkg/clatch.json').connector.cliBin")
+          "./pkg/$CLI_BIN" --help | head -n 1
+          if "./pkg/$CLI_BIN" status 2>&1 | tee /tmp/out; then
+            echo "status must fail with no app running"; exit 1
+          fi
+          grep -q "not running" /tmp/out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: clapp-${{ matrix.target }}
+          path: |
+            *.clapp
+            *.clapp.sha256
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Carry the corpus index forward
+        env:
+          GH_TOKEN: ${{ github.token }}
+        # The app fetches releases/latest/download/corpus.gtu, so EVERY release must carry
+        # one — including an app-only fix. Rather than rebuilding the index on every tag
+        # (it needs LibreOffice and a 450 MB model), copy the previous release's, and fail
+        # loudly if there is none to copy: a release without it bricks new installs.
+        run: |
+          if gh release download --repo "$GITHUB_REPOSITORY" --pattern corpus.gtu --dir dist 2>/dev/null; then
+            echo "carried the previous corpus.gtu forward"
+          else
+            echo "::error::no corpus.gtu found on any previous release."
+            echo "::error::Build one (see README § Rebuilding the corpus) and attach it to this release,"
+            echo "::error::or new installs will fail at first run."
+            exit 1
+          fi
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.clapp
+            dist/*.clapp.sha256
+            dist/corpus.gtu
+          generate_release_notes: true

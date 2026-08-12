@@ -1,0 +1,63 @@
+[package]
+name = "gturag"
+version = "0.1.0"
+edition = "2021"
+description = "Search over every form Gebze Technical University publishes, on one screen you and your agent share."
+license = "Apache-2.0"
+# One binary, two roles (clappkit::role). Do NOT add `windows_subsystem = "windows"` to
+# the source — a GUI-subsystem image gets no console, and every CLI call would return
+# instantly and empty through Clatch's `.cmd` shim. See clappkit/src/role.rs.
+default-run = "gturag"
+
+[[bin]]
+name = "gturag"
+path = "src/main.rs"
+
+[dependencies]
+# The shared foundation: role dispatch, both channels, paths, atomic writes, the Tauri
+# glue. Carried as a submodule at the repo root so a clone builds on its own.
+clappkit = { path = "../clappkit", features = ["tauri"] }
+
+tauri = { version = "2", features = ["image-png"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "fs"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+
+# Retrieval. The embedder is pure Rust on purpose (PLAYBOOK §2: native first, a sidecar
+# only when a library forces it) — no ONNX runtime to ship, nothing to statically link,
+# and the same binary cross-compiles. multilingual-e5-small is a 12-layer BERT with a
+# 384-wide hidden state; its weights are NOT vendored here, they are downloaded on first
+# run into the app's own data directory.
+candle-core = "0.11"
+candle-nn = "0.11"
+candle-transformers = "0.11"
+# default-features off: the defaults pull `onig` (a C regex library) and `esaxx_fast`,
+# which exists only for training. A regex engine is still mandatory — the crate refuses to
+# compile without one — so take `fancy-regex`, which is pure Rust and keeps the build free
+# of a C toolchain on all three platforms.
+tokenizers = { version = "0.23", default-features = false, features = ["fancy-regex"] }
+
+# Provisioning downloads (weights + corpus index). rustls, never native-tls — one binary
+# that keeps cross-compiling (PLAYBOOK, field notes).
+ureq = { version = "3", default-features = false, features = ["rustls"] }
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[features]
+# Tauri's own: `cargo build` without it loads the dev URL and you get a white window,
+# which is why the rule is `npm run build`, never bare `cargo build`.
+custom-protocol = ["tauri/custom-protocol"]
+
+[profile.release]
+# The depot ships one binary and the human waits on its download, so trade build time for
+# size. `panic = "abort"` is deliberately NOT set: the CLI role reports failures.
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
+
+# src-tauri is its own workspace: the repo root holds no Cargo.toml, and clappkit is a
+# submodule with a workspace of its own.
+[workspace]

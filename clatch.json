@@ -1,0 +1,82 @@
+{
+  "manifestVersion": 1,
+  "id": "com.gtu.rag",
+  "name": "GTÜ Formlar",
+  "description": "Gebze Teknik Üniversitesi'nin bütün resmî formları, siz ve ajanınızın paylaştığı tek bir arama çubuğunda. Hangi formu aradığınızı bilmeseniz de olur — ne yapmak istediğinizi yazın.",
+  "about": "A search surface over every form Gebze Technical University publishes on its quality-office Formlar page — 791 documents, Turkish and English, forms and spreadsheets alike. Retrieval is hybrid: an exact form code (FR-0083) wins outright, and everything else is BM25 fused with dense multilingual embeddings, so \"danışman değiştirmek istiyorum\" finds the advisor-change form without naming it. The point is the second surface: every search, every opened form and every saved item is a CLI verb AND a control in the window, over one shared state — the agent's `gturag search staj` types itself into the search bar and fills the results, and the form you open by hand rides along on your next prompt so you can just ask \"bunu nasıl dolduracağım?\". The app retrieves; the agent reads and answers. No model runs on a server, and none ships in the app: the embedder's weights and the prebuilt index are downloaded once, on first run, into the app's own data directory.",
+  "tags": [
+    "education",
+    "search",
+    "productivity"
+  ],
+  "version": "0.1.0",
+  "protocol": 2,
+  "icon": "assets/icon.png",
+  "launch": {
+    "macos": "bin/gturag",
+    "windows": "bin/gturag.exe",
+    "linux": "bin/gturag",
+    "args": [
+      "app"
+    ]
+  },
+  "connector": {
+    "cli": "gturag",
+    "commands": [
+      {
+        "name": "search",
+        "about": "search the GTÜ forms — plain Turkish or English, or a form code like FR-0083; the results fill the window as well as your terminal"
+      },
+      {
+        "name": "open",
+        "about": "open one form (title, code, revision, source URL, matching passages) and show it in the window"
+      },
+      {
+        "name": "get",
+        "about": "download one form to disk and print the local path, so it can be read or filled in"
+      },
+      {
+        "name": "saved",
+        "about": "print the shared saved list — the forms collected for the task at hand"
+      },
+      {
+        "name": "save",
+        "about": "add a form to the shared saved list"
+      },
+      {
+        "name": "unsave",
+        "about": "remove a form from the shared saved list"
+      },
+      {
+        "name": "sort",
+        "about": "re-sort the current results by relevance, form code or title — in both surfaces"
+      },
+      {
+        "name": "status",
+        "about": "what both surfaces are looking at: query, results, open form, saved list, index and model state, agents"
+      },
+      {
+        "name": "sync",
+        "about": "check for a newer corpus index and download it; also retries a provisioning step that failed"
+      },
+      {
+        "name": "focus",
+        "about": "focus the app window"
+      },
+      {
+        "name": "close",
+        "about": "quit the app"
+      }
+    ],
+    "signals": [
+      {
+        "id": "doc.opened",
+        "type": "buffered"
+      },
+      {
+        "id": "saved.changed",
+        "type": "context"
+      }
+    ]
+  }
+}

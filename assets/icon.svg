@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- The editable source for assets/icon.png (docs/ICONS.md rule 1: the mark is
+       regenerated, never hand-traced). Rasterise with tools/build-index/../../scripts/icon.py.
+
+       Colours are GTÜ's own, read from the live site's stylesheet rather than from memory
+       (PLAYBOOK §3): navy #1a3b79 with the orange accent #f26522.
+
+       The glyph is Lucide's `file-search`, unmodified path data, ISC licensed and credited
+       in THIRD_PARTY_NOTICES.md. Rule 5: never approximate a logo by hand — and GTÜ's own
+       crest is the university's mark, not this app's, so a licensed utility glyph is the
+       honest choice for a third-party tool. -->
+
+  <!-- Full-bleed tile: fills the whole canvas, corners rounded at 0.225 × side (rule 2). -->
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#2a4f96"/>
+      <stop offset="100%" stop-color="#152d5c"/>
+    </linearGradient>
+  </defs>
+  <rect x="0" y="0" width="1024" height="1024" rx="230.4" ry="230.4" fill="url(#tile)"/>
+
+  <!-- Lucide file-search on a 24×24 grid, scaled to ~55% of the canvas and centred. -->
+  <g transform="translate(230.4,230.4) scale(23.467)"
+     fill="none" stroke="#ffffff" stroke-width="2"
+     stroke-linecap="round" stroke-linejoin="round">
+    <path d="M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z"/>
+    <path d="M14 2v5a1 1 0 0 0 1 1h5"/>
+  </g>
+  <!-- The magnifier in the accent, so the mark reads as *search* at 16px too (rule 4). -->
+  <g transform="translate(230.4,230.4) scale(23.467)"
+     fill="none" stroke="#f26522" stroke-width="2"
+     stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="11.5" cy="14.5" r="2.5"/>
+    <path d="M13.3 16.3 15 18"/>
+  </g>
+</svg>
