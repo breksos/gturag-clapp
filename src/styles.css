@@ -313,6 +313,12 @@ mark {
   background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600;
 }
 .detail-actions .primary:hover { background: var(--navy-600); }
+.detail-actions .secondary { color: var(--muted); font-size: 12.5px; }
+.detail-actions .secondary:hover { color: var(--text); border-color: var(--navy-400); }
+
+.viewer-note {
+  margin: 8px 0 0; font-size: 11px; line-height: 1.45; color: var(--muted);
+}
 
 .detail-passages { margin-top: 15px; }
 .detail-passages h4 {

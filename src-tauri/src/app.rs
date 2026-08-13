@@ -181,6 +181,93 @@ fn asset(path: String) -> Option<String> {
     kit::asset(&path)
 }
 
+/// Open a form on the university's own site, in the user's real browser.
+///
+/// A plain `<a target="_blank">` does nothing in a Tauri window: WebView2 raises
+/// `NewWindowRequested` and, with no handler, the click is swallowed. So the one link this
+/// app has must travel through the core.
+///
+/// Two constraints, because this hands a string to the operating system's URL handler:
+///
+/// * **`https` only.** Not a formality — `file:`, `javascript:` and the various shell
+///   schemes are exactly what a URL opener is abused for, and every URL we legitimately
+///   open comes from our own index and is an `https://www.gtu.edu.tr/...` link.
+/// * **No shell.** `cmd /C start` would parse `&` and `|` out of the URL; `rundll32
+///   url.dll,FileProtocolHandler` takes the URL as one argument and no shell sees it.
+#[tauri::command]
+fn open_url(url: String) -> Result<(), String> {
+    if !url.starts_with("https://") {
+        return Err(format!("refusing to open a non-https URL: {url}"));
+    }
+    // Percent-encode before handing it over. Almost every URL in this corpus contains
+    // spaces and Turkish letters — `.../FR-0083 YL-DR Danışman Değişikliği Formu R1.pdf` —
+    // and a URL handler that receives a raw space treats what follows as another argument.
+    // Encoding the whole set at once is why this is done here rather than left to callers.
+    let encoded = encode_url(&url);
+    let spawned = if cfg!(target_os = "windows") {
+        std::process::Command::new("rundll32")
+            .args(["url.dll,FileProtocolHandler", &encoded])
+            .spawn()
+    } else if cfg!(target_os = "macos") {
+        std::process::Command::new("open").arg(&encoded).spawn()
+    } else {
+        std::process::Command::new("xdg-open").arg(&encoded).spawn()
+    };
+    spawned
+        .map(|_| ())
+        .map_err(|e| format!("cannot open the browser: {e}"))
+}
+
+/// Percent-encode everything a URL may not carry literally, leaving the characters that
+/// are structural (`:/?#[]@` and the sub-delimiters) alone — and leaving `%` alone so a
+/// URL that is already encoded is not double-encoded into nonsense.
+fn encode_url(url: &str) -> String {
+    const KEEP: &str = "-._~:/?#[]@!$&'()*+,;=%";
+    let mut out = String::with_capacity(url.len());
+    for ch in url.chars() {
+        if ch.is_ascii_alphanumeric() || KEEP.contains(ch) {
+            out.push(ch);
+        } else {
+            let mut buf = [0u8; 4];
+            for b in ch.encode_utf8(&mut buf).as_bytes() {
+                out.push_str(&format!("%{b:02X}"));
+            }
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_real_form_url_survives_encoding() {
+        // Every character that broke this: a space, and four Turkish letters.
+        let raw = "https://www.gtu.edu.tr/fileman/Formlar-Türkçe/FR-0083 Danışman Değişikliği Formu R1.pdf";
+        let got = encode_url(raw);
+        assert!(!got.contains(' '), "a space reaching the URL handler splits the argument");
+        assert!(got.starts_with("https://www.gtu.edu.tr/fileman/"), "{got}");
+        assert!(got.ends_with("R1.pdf"), "{got}");
+        assert!(got.contains("%20"), "{got}");
+        assert!(!got.contains('ü') && !got.contains('ç'), "{got}");
+    }
+
+    #[test]
+    fn an_already_encoded_url_is_not_encoded_twice() {
+        // `%` is preserved, so %20 stays %20 rather than becoming %2520.
+        let once = encode_url("https://x.invalid/a%20b");
+        assert_eq!(once, "https://x.invalid/a%20b");
+        assert_eq!(encode_url(&once), once, "encoding must be idempotent");
+    }
+
+    #[test]
+    fn query_structure_is_left_alone() {
+        let u = "https://x.invalid/p?a=1&b=2#frag";
+        assert_eq!(encode_url(u), u);
+    }
+}
+
 /// What the provisioning worker reports back as it goes.
 enum Prov {
     IndexStage(Stage),
@@ -288,7 +375,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .manage(core.clone())
-        .invoke_handler(tauri::generate_handler![run_cmd, asset])
+        .invoke_handler(tauri::generate_handler![run_cmd, asset, open_url])
         .setup(move |app| {
             let handle = app.handle().clone();
             let _ = APP.set(handle.clone());

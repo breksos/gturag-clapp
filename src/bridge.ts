@@ -4,6 +4,40 @@
 
 export { useAsset, prefetchAssets, agentTint } from "@clappkit";
 import { useSnapshot, type Snapshotish } from "@clappkit";
+import { invoke } from "@tauri-apps/api/core";
+
+/**
+ * Open a form on the university's site, in the user's real browser.
+ *
+ * Not an `<a target="_blank">`: WebView2 raises `NewWindowRequested` for those and Tauri
+ * swallows it, so the link silently does nothing. The core hands the URL to the OS.
+ */
+export async function openUrl(url: string): Promise<void> {
+  try {
+    await invoke("open_url", { url });
+  } catch (e) {
+    console.error("open_url failed", e);
+  }
+}
+
+/**
+ * A URL that renders the form IN the browser, rather than downloading it.
+ *
+ * Browsers display PDFs natively, so those link straight to the university. They cannot
+ * display Word or Excel at all — and 527 of the 791 forms are exactly that — so those go
+ * through Microsoft's public Office viewer, which means the form's (public) URL is sent to
+ * Microsoft. That is a real trade and the reason the window offers a second, always-direct
+ * download button beside this one: nothing here happens without the user choosing it.
+ */
+export function viewUrl(doc: Doc): string {
+  if (doc.ext.toLowerCase() === "pdf") return doc.url;
+  return `https://view.officeapps.live.com/op/view.aspx?src=${encodeURIComponent(doc.url)}`;
+}
+
+/** Whether the view button will hand this form to the Office viewer. */
+export function usesViewer(doc: Doc): boolean {
+  return doc.ext.toLowerCase() !== "pdf";
+}
 
 /** Why a form is in the results. `code` means the query named it — a fact, not a ranking. */
 export type Why = "code" | "match";

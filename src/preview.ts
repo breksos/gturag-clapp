@@ -125,6 +125,12 @@ export function installPreview(): boolean {
   (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {
     invoke: async (cmd: string, args: Record<string, unknown>) => {
       if (cmd === "asset") return null;
+      // Preview runs in a real browser, where target="_blank" works — so the link can
+      // simply open, and clicking it here proves the wiring rather than doing nothing.
+      if (cmd === "open_url") {
+        window.open(String(args?.url ?? ""), "_blank", "noreferrer");
+        return null;
+      }
       const req = (args?.req ?? {}) as { cmd?: string; query?: string; id?: string; by?: string };
       // Enough behaviour to click around: searching filters, opening selects, saving toggles.
       if (req.cmd === "search") {

@@ -7,6 +7,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   useApp, useAsset, prefetchAssets, agentTint, isMatch, fold,
+  openUrl, viewUrl, usesViewer,
   percentOf, type Doc, type Agent, type Snapshot,
 } from "./bridge";
 
@@ -274,15 +275,43 @@ function Detail({
         <dt>Dil</dt><dd>{doc.lang === "tr" ? "Türkçe" : "İngilizce"}</dd>
       </dl>
       <div className="detail-actions">
-        {/* A real link to the university's own copy: the app is a finder, and the
-            authoritative document is always theirs. */}
-        <a className="primary" href={doc.url} target="_blank" rel="noreferrer">
-          Formu üniversitenin sayfasında aç ↗
+        {/* Two links, because they are genuinely two different things. VIEW renders the
+            form in the browser — which for Word and Excel means Microsoft's viewer, since
+            no browser can display them. DOWNLOAD always goes straight to the university
+            and touches nobody else. Both are <a> elements so they read and behave like
+            links, but the navigation goes through the core: a bare target="_blank" is
+            swallowed by the webview. */}
+        <a
+          className="primary"
+          href={viewUrl(doc)}
+          onClick={(e) => {
+            e.preventDefault();
+            void openUrl(viewUrl(doc));
+          }}
+        >
+          Tarayıcıda görüntüle ↗
+        </a>
+        <a
+          className="secondary"
+          href={doc.url}
+          onClick={(e) => {
+            e.preventDefault();
+            void openUrl(doc.url);
+          }}
+        >
+          Dosyayı indir ({doc.ext.toUpperCase()})
         </a>
         <button onClick={() => onToggleSave(doc)}>
           {doc.saved ? "★ Listede" : "☆ Listeye ekle"}
         </button>
       </div>
+      {usesViewer(doc) && (
+        // Said out loud rather than buried: the viewer is a third party, and a user who
+        // would rather not involve one has the download button right above.
+        <p className="viewer-note">
+          Word/Excel dosyaları tarayıcıda Microsoft görüntüleyicisi ile açılır.
+        </p>
+      )}
       {doc.passages.length > 0 && (
         <div className="detail-passages">
           <h4>Eşleşen bölümler</h4>
