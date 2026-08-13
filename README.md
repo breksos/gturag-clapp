@@ -69,7 +69,7 @@ The authoritative copies stay on the university's servers, and the app links to 
 Requires [Clatch][clatch]. A clapp runs only under it.
 
 ```sh
-clatch install github:breksos/gturag-clapp
+clatch install breksos/gturag-clapp
 clatch run com.breksos.gturag
 ```
 

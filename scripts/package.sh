@@ -93,7 +93,13 @@ if [ -z "$FINAL" ]; then
     FINAL=$(ls -t "$PKG"/../*.clapp "$PKG"/*.clapp 2>/dev/null | head -n 1)
 fi
 [ -n "$FINAL" ] || { echo "package.sh: clatch pack produced no .clapp" >&2; exit 1; }
-sha256sum "$FINAL" > "$FINAL.sha256" 2>/dev/null || shasum -a 256 "$FINAL" > "$FINAL.sha256"
+# Hash the BASENAME, from the file's own directory. `sha256sum "$FINAL"` records whatever
+# path it was given — under Git Bash that is `/c/Users/…`, which makes `sha256sum -c` fail
+# on every machine but this one, looking for a path that does not exist there. Clatch reads
+# only the hash and did not notice; a human running the standard check would have.
+( cd "$(dirname "$FINAL")" && base=$(basename "$FINAL") \
+    && { sha256sum "$base" > "$base.sha256" 2>/dev/null \
+         || shasum -a 256 "$base" > "$base.sha256"; } )
 
 echo
 echo "  $(basename "$FINAL")  $(du -h "$FINAL" | cut -f1)  (v$VERSION)"
