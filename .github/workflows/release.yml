@@ -118,27 +118,15 @@ jobs:
           path: dist
           merge-multiple: true
 
-      - name: Carry the corpus index forward
-        env:
-          GH_TOKEN: ${{ github.token }}
-        # The app fetches releases/latest/download/corpus.gtu, so EVERY release must carry
-        # one — including an app-only fix. Rather than rebuilding the index on every tag
-        # (it needs LibreOffice and a 450 MB model), copy the previous release's, and fail
-        # loudly if there is none to copy: a release without it bricks new installs.
-        run: |
-          if gh release download --repo "$GITHUB_REPOSITORY" --pattern corpus.gtu --dir dist 2>/dev/null; then
-            echo "carried the previous corpus.gtu forward"
-          else
-            echo "::error::no corpus.gtu found on any previous release."
-            echo "::error::Build one (see README § Rebuilding the corpus) and attach it to this release,"
-            echo "::error::or new installs will fail at first run."
-            exit 1
-          fi
-
+      # No corpus.gtu step here, deliberately. The index is COMMITTED to the repository and
+      # copied into every depot by package.sh, so a release carries it inside each .clapp
+      # rather than beside them. That removes the failure mode where an app-only release
+      # forgets the asset and every new install breaks at first run — and `gturag sync`
+      # still fetches the committed one straight from the default branch, so the corpus can
+      # be refreshed by a commit, with no release at all.
       - uses: softprops/action-gh-release@v2
         with:
           files: |
             dist/*.clapp
             dist/*.clapp.sha256
-            dist/corpus.gtu
           generate_release_notes: true

@@ -1,0 +1,11 @@
+{
+ "code": "FR-0751",
+ "ext": "docx",
+ "id": "FR-0751.tr",
+ "lang": "tr",
+ "name": "FR-0751 Zorunlu Staj Stajyeri Bilgi Formu R0.docx",
+ "rev": 0,
+ "text": "[ Title ]\nT.C.\nGEBZE TEKNİK ÜNİVERSİTESİ\n[ StajOgrenciFakulte ] FAKÜLTESİ DEKANLIĞI\nSTAJYERİ BİLGİ FORMU\nStaj Komisyonu Başkanlığına\nZorunlu staj yapan tüm öğrenciler bu formu staja başladıkları birinci haftanın sonuna kadar doldurup sisteme yükler.\nÖğrenci\nAdı Soyadı\n[ StajOgrenciAdSoyad ]\nÖğrenci Numarası\n[ StajOgrenciNo ]\nTC Kimlik Numarası\n[ StajOgrenciTCkimlik ]\nBölümü\n[ StajOgrenciBolum ]\nSınıfı\n[ StajOgrenciSinif ]\nCep Telefon Numarası\n[ StajOgrenciCep ]\nZorunlu Staj Başlangıç Tarihi\nZorunlu Staj Bitiş Tarihi\nEposta Adresi:\n[ StajOgrenciEposta ]\nStaj Yapılan Kurum/Kuruluş\nStaj Yapılan Kurum/Kuruluş Adı\n[ StajKurumAdi ]\nKurum/Kuruluşun Adresi\n[ StajKurumAdresi ] [ StajKurumSehir ]\nStaj yapan öğrenciden sorumlu mühendisin\nAdı Soyadı\n[ StajKurumPersonelAdi ]\nGörevi / Pozisyonu\n[ StajKurumPersonelGorevi ]\nTelefon numarası\n[ StajKurumTelefon ]\nEposta Adresi\n[ StajKurumEposta ]\nStaj Bilgisi\nStaj yapılan konunun açıklanması (en az 300 karakter):\n[ StajSebep ]\nStaj sonucu elde edilmesi planlanan kişisel kazanımları maddeler halinde giriniz\nStaj yapılan firma/kurum ile GTÜ arasında yapılabilecek işbirliği konularını (ortak projeler, eğitimi programları, sponsorluk fırsatları, vs ) sorumlu mühendis ile tartıştıktan sonra giriniz .\nBu alana eklemek istediğiniz konuları girebilirsiniz\nForm No: FR-0751 Yayın Tarihi:19.02.2024 Değ.No:0 Değ. Tarihi:-",
+ "title": "Zorunlu Staj Stajyeri Bilgi Formu",
+ "url": "https://www.gtu.edu.tr/fileman/Files/UserFiles/kalite/Formlar/Formlar-Türkçe/FR-0751 Zorunlu Staj Stajyeri Bilgi Formu R0.docx"
+}

@@ -71,16 +71,16 @@ impl Core {
         // `get` reaches the network, so it resolves under the lock, downloads WITHOUT it,
         // and only then rejoins — holding the state lock across a download would freeze
         // the window for the length of a file transfer.
-        let fetched: Option<Result<String, String>> = if cmd == "get" {
+        let fetched: Option<Result<(String, String), String>> = if cmd == "get" {
             let target = {
                 let s = self.state.lock().await;
                 s.corpus().and_then(|c| {
-                    crate::index::resolve(c, &arg("id")).map(|(_, d)| (d.url.clone(), d.name.clone()))
+                    crate::index::resolve(c, &arg("id")).map(|(_, d)| (d.id.clone(), d.url.clone()))
                 })
             };
             Some(match target {
-                Some((url, name)) => provision::fetch_document(CLI, &url, &name)
-                    .map(|p| clappkit::paths::simplified(&p).display().to_string())
+                Some((id, url)) => provision::fetch_form_text(CLI, &id)
+                    .map(|text| (text, url))
                     .map_err(|e| e.to_string()),
                 None => Err(format!("no form matches `{}`", arg("id"))),
             })
@@ -136,7 +136,7 @@ impl Core {
                 None => json!({ "ok": false, "error": "sort by relevance, code or title" }),
             },
             "get" => match fetched.expect("computed above for this verb") {
-                Ok(path) => json!({ "ok": true, "path": path }),
+                Ok((text, url)) => json!({ "ok": true, "text": text, "url": url }),
                 Err(e) => json!({ "ok": false, "error": e }),
             },
             "sync" => {

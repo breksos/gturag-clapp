@@ -29,9 +29,11 @@ SEARCHING
 
 ONE FORM
   open <id|code>           Open a form and show it in the window: title, code, revision,
-                           language, source URL and the passages that matched.
-  get <id|code>            Download the file and print the local path, so you can read or
-                           fill it in. Accepts FR-0083, FR-0083.en, or a full id.
+                           language, source URL and the passages that matched. The human
+                           reads the form itself on the university's own page.
+  get <id|code>            Print the form's FULL text, so you can answer questions about
+                           its fields rather than guessing from a passage. Accepts
+                           FR-0083, FR-0083.en, or a full id.
 
 COLLECTING
   saved                    Print the shared saved list.
@@ -197,9 +199,17 @@ pub async fn run(args: Vec<String>) -> ! {
             if reply["ok"] == false {
                 die(field(&reply, "error"));
             }
-            // The path is the whole point of this verb, so it is the whole output: an
-            // agent pipes this straight into a reader.
-            println!("{}", field(&reply, "path"));
+            let text = field(&reply, "text");
+            if text.trim().is_empty() {
+                // Three of the 791 have no extractable text. Say so, and point at the one
+                // place the content definitely exists, rather than printing nothing.
+                eprintln!("{CLI}: this form has no extractable text — open it at:");
+                println!("{}", field(&reply, "url"));
+            } else {
+                // The text IS the answer for this verb, so it is the whole of stdout: an
+                // agent reads it directly rather than opening a file.
+                println!("{text}");
+            }
         }
 
         "saved" => {

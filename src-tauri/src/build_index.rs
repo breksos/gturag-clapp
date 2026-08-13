@@ -1,26 +1,39 @@
-//! Stage 2 of the corpus build: embed the passages `fetch.py` extracted, and write the
-//! `corpus.gtu` the app downloads.
+//! Stage 2 of the corpus build: chunk and embed the committed form database, and write
+//! the `corpus.gtu` that ships inside the depot.
 //!
-//! This lives in the app's own binary rather than in a script, for one reason: it must use
-//! [`crate::embed`] — the very same code that embeds queries at runtime. A separate
-//! implementation (a Python script with sentence-transformers, say) would agree with this
-//! one until it quietly didn't, and the symptom of a passage/query mismatch is not an
-//! error, it is search that is a little bit wrong forever.
+//! The input is `forms/*.json` — one file per form, committed to the repository, holding
+//! metadata and extracted text. That is the project's database: scraping the university's
+//! site and prying text out of pre-2007 Office files happens once, in Python, and its
+//! result is a reviewable artifact. Rebuilding the index from it needs neither the network
+//! nor LibreOffice.
+//!
+//! This lives in the app's own binary for one reason: it must use [`crate::embed`] — the
+//! very same code that embeds queries at runtime. A separate implementation would agree
+//! with this one until it quietly didn't, and the symptom of a passage/query mismatch is
+//! not an error, it is search that is a little bit wrong forever.
 //!
 //! It is a maintainer verb, deliberately absent from `clatch.json`'s `connector.commands`
 //! and from `gturag -h`: an agent is never granted it, because it is part of building a
 //! release, not of using the app.
 //!
-//!     gturag index-corpus tools/build-index/work --model <dir> --out corpus.gtu
+//!     gturag index-corpus forms --model <dir> --built 2026-08-13 --out corpus.gtu
 
 use crate::corpus::{Chunk, Corpus, Doc, Header, DIM, MODEL_ID};
 use crate::embed::{Embedder, BATCH};
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 
-/// `docs.jsonl`, as `fetch.py` writes it.
+/// How long a passage may be, in characters, and how much neighbouring passages share.
+/// A form's body is mostly a table of blanks, so passages are small and the overlap keeps
+/// a sentence that straddles a boundary findable from either side.
+const MAX_CHARS: usize = 900;
+const OVERLAP: usize = 150;
+/// A runaway spreadsheet must not dominate the index with hundreds of passages.
+const MAX_CHUNKS_PER_DOC: usize = 40;
+
+/// One `forms/<id>.json`.
 #[derive(serde::Deserialize)]
-struct RawDoc {
+struct Form {
     id: String,
     code: Option<String>,
     rev: u32,
@@ -29,65 +42,96 @@ struct RawDoc {
     name: String,
     ext: String,
     url: String,
-    chars: u64,
-}
-
-#[derive(serde::Deserialize)]
-struct RawChunk {
-    doc_id: String,
-    ord: u32,
     text: String,
 }
 
-fn read_jsonl<T: serde::de::DeserializeOwned>(path: &Path) -> Result<Vec<T>> {
-    let text = std::fs::read_to_string(path)
-        .with_context(|| format!("cannot read {} — run tools/build-index/fetch.py first", path.display()))?;
-    let mut out = Vec::new();
-    for (i, line) in text.lines().enumerate() {
-        if line.trim().is_empty() {
-            continue;
-        }
-        out.push(
-            serde_json::from_str(line)
-                .with_context(|| format!("{}:{} will not parse", path.display(), i + 1))?,
-        );
+fn read_forms(dir: &Path) -> Result<Vec<Form>> {
+    let entries = std::fs::read_dir(dir)
+        .with_context(|| format!("cannot read {} — run tools/build-index/fetch.py first", dir.display()))?;
+    let mut paths: Vec<PathBuf> = entries
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().is_some_and(|e| e == "json"))
+        .collect();
+    // Sorted, so two builds of the same database produce byte-identical output.
+    paths.sort();
+
+    let mut out = Vec::with_capacity(paths.len());
+    for p in paths {
+        let text = std::fs::read_to_string(&p)
+            .with_context(|| format!("cannot read {}", p.display()))?;
+        out.push(serde_json::from_str(&text).with_context(|| format!("{} will not parse", p.display()))?);
     }
+    anyhow::ensure!(!out.is_empty(), "no forms found in {}", dir.display());
     Ok(out)
 }
 
-pub fn run(work: &Path, model: &Path, out: &Path, source: &str, built: &str) -> Result<()> {
-    let raw_docs: Vec<RawDoc> = read_jsonl(&work.join("docs.jsonl"))?;
-    let raw_chunks: Vec<RawChunk> = read_jsonl(&work.join("chunks.jsonl"))?;
-    println!("  {} documents, {} passages", raw_docs.len(), raw_chunks.len());
-
-    let docs: Vec<Doc> = raw_docs
-        .into_iter()
-        .map(|d| Doc {
-            id: d.id,
-            code: d.code,
-            rev: d.rev,
-            lang: d.lang,
-            title: d.title,
-            name: d.name,
-            ext: d.ext,
-            url: d.url,
-            chars: d.chars,
-        })
-        .collect();
-
-    // Chunks carry a document *id* on the wire and a document *index* in the file. Resolve
-    // once, here, and fail loudly on an orphan rather than letting `Corpus::read` reject
-    // the finished artifact after an hour of embedding.
-    let mut chunks = Vec::with_capacity(raw_chunks.len());
-    let mut texts = Vec::with_capacity(raw_chunks.len());
-    for rc in raw_chunks {
-        let doc = docs
-            .iter()
-            .position(|d| d.id == rc.doc_id)
-            .with_context(|| format!("passage references unknown document `{}`", rc.doc_id))?;
-        chunks.push(Chunk { doc: doc as u32, ord: rc.ord, text: rc.text.clone() });
-        texts.push(rc.text);
+/// Split a form's text into passages, each carrying the title.
+///
+/// The title rides on EVERY chunk on purpose: a form's body is often a bare table of
+/// blanks, and a passage that has lost "Danışman Değişikliği Formu" is a passage no query
+/// can find.
+fn chunk(title: &str, body: &str) -> Vec<String> {
+    let body = body.trim();
+    if body.is_empty() {
+        return vec![title.to_string()];
     }
+    // Character indices, because Turkish text is not one byte per character and slicing a
+    // UTF-8 string on a byte boundary panics.
+    let chars: Vec<char> = body.chars().collect();
+    let mut out = Vec::new();
+    let mut start = 0;
+    while start < chars.len() {
+        let mut end = (start + MAX_CHARS).min(chars.len());
+        if end < chars.len() {
+            // Prefer to break on a line boundary in the back half of the window.
+            if let Some(cut) = chars[start + MAX_CHARS / 2..end]
+                .iter()
+                .rposition(|c| *c == '\n')
+            {
+                end = start + MAX_CHARS / 2 + cut;
+            }
+        }
+        let piece: String = chars[start..end].iter().collect();
+        let piece = piece.trim();
+        if !piece.is_empty() {
+            out.push(format!("{title}\n{piece}"));
+        }
+        if end >= chars.len() || out.len() >= MAX_CHUNKS_PER_DOC {
+            break;
+        }
+        start = end.saturating_sub(OVERLAP).max(start + 1);
+    }
+    if out.is_empty() {
+        out.push(title.to_string());
+    }
+    out
+}
+
+pub fn run(forms_dir: &Path, model: &Path, out: &Path, source: &str, built: &str) -> Result<()> {
+    let forms = read_forms(forms_dir)?;
+    println!("  {} forms from {}", forms.len(), forms_dir.display());
+
+    let mut docs = Vec::with_capacity(forms.len());
+    let mut chunks = Vec::new();
+    let mut texts = Vec::new();
+    for (i, f) in forms.iter().enumerate() {
+        for (ord, piece) in chunk(&f.title, &f.text).into_iter().enumerate() {
+            chunks.push(Chunk { doc: i as u32, ord: ord as u32, text: piece.clone() });
+            texts.push(piece);
+        }
+        docs.push(Doc {
+            id: f.id.clone(),
+            code: f.code.clone(),
+            rev: f.rev,
+            lang: f.lang.clone(),
+            title: f.title.clone(),
+            name: f.name.clone(),
+            ext: f.ext.clone(),
+            url: f.url.clone(),
+            chars: f.text.chars().count() as u64,
+        });
+    }
+    println!("  {} passages", chunks.len());
 
     println!("  loading the embedder from {}", model.display());
     let embedder = Embedder::load(model)?;
@@ -127,7 +171,7 @@ pub fn run(work: &Path, model: &Path, out: &Path, source: &str, built: &str) -> 
     let back = Corpus::read(out).context("the index we just wrote does not load")?;
     let size = std::fs::metadata(out).map(|m| m.len()).unwrap_or(0);
     println!(
-        "\n  {} — {} documents, {} passages, {:.1} MB",
+        "\n  {} — {} forms, {} passages, {:.1} MB",
         out.display(),
         back.docs().len(),
         back.chunks().len(),
@@ -138,12 +182,12 @@ pub fn run(work: &Path, model: &Path, out: &Path, source: &str, built: &str) -> 
 
 /// Parse the maintainer verb's arguments.
 pub fn from_args(args: &[String]) -> Result<(PathBuf, PathBuf, PathBuf, String, String)> {
-    let mut work = PathBuf::from("tools/build-index/work");
+    let mut forms = PathBuf::from("forms");
     let mut model = PathBuf::new();
     let mut out = PathBuf::from("corpus.gtu");
     let mut source = "https://www.gtu.edu.tr/kategori/2382/0/display.aspx".to_string();
-    // No clock here: the build date is an input, so two runs of the same corpus produce
-    // byte-identical output and a release is reproducible.
+    // No clock here: the build date is an input, so two runs over the same database
+    // produce byte-identical output and a release is reproducible.
     let mut built = String::new();
 
     let mut i = 0;
@@ -153,11 +197,68 @@ pub fn from_args(args: &[String]) -> Result<(PathBuf, PathBuf, PathBuf, String, 
             "--out" => { out = PathBuf::from(args.get(i + 1).context("--out needs a path")?); i += 2 }
             "--source" => { source = args.get(i + 1).context("--source needs a URL")?.clone(); i += 2 }
             "--built" => { built = args.get(i + 1).context("--built needs a date")?.clone(); i += 2 }
-            other if !other.starts_with("--") => { work = PathBuf::from(other); i += 1 }
+            other if !other.starts_with("--") => { forms = PathBuf::from(other); i += 1 }
             other => anyhow::bail!("unknown option `{other}`"),
         }
     }
     anyhow::ensure!(!model.as_os_str().is_empty(), "--model <dir> is required (the folder holding model.safetensors)");
     anyhow::ensure!(!built.is_empty(), "--built <YYYY-MM-DD> is required, so the build is reproducible");
-    Ok((work, model, out, source, built))
+    Ok((forms, model, out, source, built))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_chunk_carries_the_title() {
+        // A form body is a table of blanks; a passage that lost its title is unfindable.
+        let body = "satır\n".repeat(600);
+        let chunks = chunk("Danışman Değişikliği Formu", &body);
+        assert!(chunks.len() > 1, "a long body must split");
+        assert!(chunks.iter().all(|c| c.starts_with("Danışman Değişikliği Formu")));
+    }
+
+    #[test]
+    fn a_form_with_no_text_still_produces_its_title() {
+        // 3 of the 791 have no extractable body; they must still be searchable by name.
+        assert_eq!(chunk("Staj Belgesi", ""), vec!["Staj Belgesi"]);
+        assert_eq!(chunk("Staj Belgesi", "   \n  "), vec!["Staj Belgesi"]);
+    }
+
+    #[test]
+    fn chunking_turkish_text_never_splits_a_character() {
+        // The bug this guards: slicing a UTF-8 String on a byte index panics, and Turkish
+        // is full of two-byte characters. A pure-ASCII test would never catch it.
+        let body = "şğüöçİĞÜÖÇı".repeat(400);
+        let chunks = chunk("Başlık", &body);
+        assert!(chunks.len() > 1);
+        for c in &chunks {
+            assert!(c.chars().count() > 0);
+        }
+    }
+
+    #[test]
+    fn a_runaway_document_is_capped() {
+        let body = "x".repeat(MAX_CHARS * 200);
+        assert!(chunk("T", &body).len() <= MAX_CHUNKS_PER_DOC);
+    }
+
+    #[test]
+    fn the_defaults_point_at_the_committed_database() {
+        let args: Vec<String> = ["--model", "m", "--built", "2026-08-13"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let (forms, _, out, _, built) = from_args(&args).unwrap();
+        assert_eq!(forms, PathBuf::from("forms"));
+        assert_eq!(out, PathBuf::from("corpus.gtu"));
+        assert_eq!(built, "2026-08-13");
+    }
+
+    #[test]
+    fn a_build_without_a_date_is_refused_rather_than_stamped_from_the_clock() {
+        let args: Vec<String> = ["--model", "m"].iter().map(|s| s.to_string()).collect();
+        assert!(from_args(&args).unwrap_err().to_string().contains("--built"));
+    }
 }

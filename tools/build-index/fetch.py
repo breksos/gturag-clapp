@@ -293,35 +293,41 @@ def clean(text: str) -> str:
     return "\n".join(line.strip() for line in text.split("\n") if line.strip())
 
 
-# ---------------------------------------------------------------- chunking
+# ---------------------------------------------------------------- the form database
+#
+# One JSON file per form, committed to the repository. This is the project's database:
+# small, diffable, and readable by anything. The originals stay on the university's
+# servers — we hold their text, not their bytes, which is also what keeps the licensing
+# honest.
+#
+# Chunking deliberately does NOT happen here. A chunk is an index-building decision, and
+# keeping it on the Rust side means the passage policy can change without re-scraping 791
+# documents or needing LibreOffice ever again.
 
-MAX_CHARS = 900
-OVERLAP = 150
+FORMS = HERE.parent.parent / "forms"
 
 
-def chunk(title: str, body: str) -> list[str]:
-    """Passages, each one openable on its own.
-
-    The title rides on every chunk: a form's body is often a bare table of blanks, and a
-    passage that has lost "Danışman Değişikliği Formu" is a passage no query can find.
-    """
-    body = body.strip()
-    if not body:
-        return [title]
-    out, start = [], 0
-    while start < len(body):
-        end = min(len(body), start + MAX_CHARS)
-        if end < len(body):
-            cut = body.rfind("\n", start + MAX_CHARS // 2, end)
-            if cut > start:
-                end = cut
-        piece = body[start:end].strip()
-        if piece:
-            out.append(f"{title}\n{piece}")
-        if end >= len(body):
-            break
-        start = max(end - OVERLAP, start + 1)
-    return out[:40]  # a runaway spreadsheet must not dominate the index
+def write_form(rec: dict, did: str, body: str) -> Path:
+    FORMS.mkdir(parents=True, exist_ok=True)
+    path = FORMS / f"{did}.json"
+    payload = {
+        "id": did,
+        "code": rec["code"],
+        "rev": rec["rev"],
+        "lang": rec["lang"],
+        "title": rec["title"],
+        "name": rec["name"],
+        "ext": rec["ext"],
+        "url": rec["url"],
+        "text": body,
+    }
+    # Sorted keys and a trailing newline so a re-scrape produces a MINIMAL diff — the point
+    # of committing these is being able to see what actually changed when GTÜ revises a form.
+    path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=1, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return path
 
 
 # ---------------------------------------------------------------- main
@@ -353,47 +359,49 @@ def main() -> int:
               f"indexed by title alone. Install it and re-run to fix.", file=sys.stderr)
 
     TXT.mkdir(parents=True, exist_ok=True)
-    docs, chunks, failures = [], [], []
+    docs, failures, written = [], [], set()
     for i, rec in enumerate(kept, 1):
         did = doc_id(rec)
         path = download(rec, args.refresh)
         body = ""
         if path:
             body = clean(extract(path, rec["ext"], converter))
-            (TXT / f"{did}.txt").write_text(body, encoding="utf-8")
         else:
             failures.append({"id": did, "name": rec["name"], "error": rec.get("error")})
 
-        docs.append(dict(id=did, code=rec["code"], rev=rec["rev"], lang=rec["lang"],
-                         title=rec["title"], name=rec["name"], ext=rec["ext"],
-                         url=rec["url"], chars=len(body)))
-        for ord_, piece in enumerate(chunk(rec["title"], body)):
-            chunks.append(dict(doc_id=did, ord=ord_, text=piece))
+        write_form(rec, did, body)
+        written.add(f"{did}.json")
+        docs.append(dict(id=did, chars=len(body)))
 
         if i % 50 == 0 or i == len(kept):
-            print(f"  {i}/{len(kept)}  {len(chunks)} chunks")
+            print(f"  {i}/{len(kept)}")
 
-    with (WORK / "docs.jsonl").open("w", encoding="utf-8") as f:
-        for d in docs:
-            f.write(json.dumps(d, ensure_ascii=False) + "\n")
-    with (WORK / "chunks.jsonl").open("w", encoding="utf-8") as f:
-        for c in chunks:
-            f.write(json.dumps(c, ensure_ascii=False) + "\n")
+    # A form GTÜ has withdrawn must LEAVE the database, or it stays searchable forever.
+    # The live page is the authority on what currently applies, so anything in forms/ that
+    # the page no longer lists is removed — and named, so the deletion is never silent.
+    removed = []
+    if FORMS.is_dir() and not args.limit:
+        for stale in sorted(FORMS.glob("*.json")):
+            if stale.name not in written:
+                stale.unlink()
+                removed.append(stale.name)
+    for name in removed:
+        print(f"    – removed {name} (no longer listed on the page)")
 
     empty = [d["id"] for d in docs if d["chars"] == 0]
     report = dict(page=PAGE, listed=len(records), kept=len(kept), culled=len(culled),
                   culled_detail=[{"name": c["name"], "reason": c["cull_reason"]} for c in culled],
-                  documents=len(docs), chunks=len(chunks),
+                  documents=len(docs), removed=removed,
                   download_failures=failures, no_text=empty,
                   libreoffice=bool(converter))
     (WORK / "report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2),
                                       encoding="utf-8")
 
-    print(f"\n  documents : {len(docs)}")
-    print(f"  chunks    : {len(chunks)}")
+    print(f"\n  forms     : {len(docs)} → {FORMS}")
     print(f"  no text   : {len(empty)}  (indexed by title alone)")
+    print(f"  removed   : {len(removed)}")
     print(f"  failures  : {len(failures)}")
-    print(f"  → {WORK}")
+    print(f"\n  next:  gturag index-corpus --built $(date +%F) --model <dir>")
     return 1 if failures else 0
 
 

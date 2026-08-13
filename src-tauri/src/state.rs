@@ -125,10 +125,6 @@ impl AppState {
         self.corpus.as_ref()
     }
 
-    pub fn has_corpus(&self) -> bool {
-        self.corpus.is_some()
-    }
-
     pub fn sort(&self) -> Sort {
         self.sort
     }

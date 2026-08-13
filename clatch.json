@@ -1,6 +1,6 @@
 {
   "manifestVersion": 1,
-  "id": "com.gtu.rag",
+  "id": "com.breksos.gturag",
   "name": "GTÜ Formlar",
   "description": "Gebze Teknik Üniversitesi'nin bütün resmî formları, siz ve ajanınızın paylaştığı tek bir arama çubuğunda. Hangi formu aradığınızı bilmeseniz de olur — ne yapmak istediğinizi yazın.",
   "about": "A search surface over every form Gebze Technical University publishes on its quality-office Formlar page — 791 documents, Turkish and English, forms and spreadsheets alike. Retrieval is hybrid: an exact form code (FR-0083) wins outright, and everything else is BM25 fused with dense multilingual embeddings, so \"danışman değiştirmek istiyorum\" finds the advisor-change form without naming it. The point is the second surface: every search, every opened form and every saved item is a CLI verb AND a control in the window, over one shared state — the agent's `gturag search staj` types itself into the search bar and fills the results, and the form you open by hand rides along on your next prompt so you can just ask \"bunu nasıl dolduracağım?\". The app retrieves; the agent reads and answers. No model runs on a server, and none ships in the app: the embedder's weights and the prebuilt index are downloaded once, on first run, into the app's own data directory.",
@@ -33,7 +33,7 @@
       },
       {
         "name": "get",
-        "about": "download one form to disk and print the local path, so it can be read or filled in"
+        "about": "print one form's full text, so its fields can be answered on rather than guessed at"
       },
       {
         "name": "saved",

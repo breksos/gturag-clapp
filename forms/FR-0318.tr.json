@@ -1,0 +1,11 @@
+{
+ "code": "FR-0318",
+ "ext": "xls",
+ "id": "FR-0318.tr",
+ "lang": "tr",
+ "name": "FR-0318 Döner Sermaye İşletme Müdürlüğü Katkı Payı Hesaplama Aracı R2.xls",
+ "rev": 2,
+ "text": "DÖNER SERMAYE İŞLETME MÜDÜRLÜĞÜ KATKI PAYI HESAPLAMA ARACI\nMALZEMESİZ | 2 | TL\nBRÜT GELİR | A | % | 120\nKDV | B | 20 | 20\nGELİR | C | 100\n% 1 PEŞİN GELİR (C%1) | D | 1 | 1\n% 5 ÜN.PROJE ÖDENEĞİ (C%5) | E | 5 | 5\nMAL VE HİZMET ALIMI + YÖNETİCİ VE EK ÖDEME PAYI | F | 26 | 26\nYASAL KESİNTİLER TOPLAMI (D+E+F+G+H) | G | 32 | 32\nSAFİ GELİR | H | 68 | 68\nMASRAFLAR | I\nKURUM İÇİ GELİR KISMI | J | 68\nKİŞİ KATKI ÖDEMELERİ MATRAHI | K | 68\nGelir vergisi (%15) | L | 10.2\nDamga Vergisi (%0,759) | M | 0.51\nNet Elegeçen | N | 57.29\nForm No: FR-0318 Yayın Tarihi: 14.11.2017 Değ.No:2 Değ.Tarihi:26.07.2023\nDÖNER SERMAYE İŞLETME MÜDÜRLÜĞÜ KATKI PAYI HESAPLAMA ARACI\nMALZEMELİ | 2 | TL\nBRÜT GELİR | A | % | 120\nKDV | B | 20 | 20\nGELİR | C | 100\n% 1 PEŞİN GELİR (C%1) | D | 1 | 1\n% 5 ÜN.PROJE ÖDENEĞİ (C%5) | E | 5 | 5\nMAL VE HİZMET ALIMI + YÖNETİCİ VE EK ÖDEME PAYI | F | 34 | 34\nYASAL KESİNTİLER TOPLAMI (D+E+F) | G | 40 | 40\nSAFİ GELİR | H | 60 | 60\nMASRAFLAR | I\nKURUM İÇİ GELİR KISMI | J | 60\nKİŞİ KATKI ÖDEMELERİ MATRAHI | K | 60\nGelir vergisi (%15) | L | 9\nDamga Vergisi (%0,759) | M | 0.45\nNet Elegeçen | N | 50.55\nForm No: FR-0318 Yayın Tarihi: 14.11.2017 Değ.No:2 Değ.Tarihi:26.07.2023\nDÖNER SERMAYE İŞLETME MÜDÜRLÜĞÜ KATKI PAYI HESAPLAMA ARACI\nARGE | 2 | TL\nBRÜT GELİR | A | % | 120\nKDV | B | 20 | 20\nGELİR | C | 100\n% 1 PEŞİN GELİR (C%1) | D | 0 | 0\n% 5 ÜN.PROJE ÖDENEĞİ (C%5) | E | 0 | 0\nMAL VE HİZMET ALIMI + YÖNETİCİ VE EK ÖDEME PAYI | F | 15 | 15\nYASAL KESİNTİLER TOPLAMI (D+E+F+G+H) | G | 15 | 15\nSAFİ GELİR | H | 85 | 85\nMASRAFLAR | I | 0\nKURUM İÇİ GELİR KISMI | J | 85\nKİŞİ KATKI ÖDEMELERİ MATRAHI | K | 85\nGelir vergisi | L | 0\nDamga Vergisi | M | 0\nNet Elegeçen | N | 85\nForm No: FR-0318 Yayın Tarihi: 14.11.2017 Değ.No:2 Değ.Tarihi:26.07.2023",
+ "title": "Döner Sermaye İşletme Müdürlüğü Katkı Payı Hesaplama Aracı",
+ "url": "https://www.gtu.edu.tr/fileman/Files/UserFiles/kalite/Formlar/Formlar-Türkçe/FR-0318 Döner Sermaye İşletme Müdürlüğü Katkı Payı Hesaplama Aracı R2.xls"
+}

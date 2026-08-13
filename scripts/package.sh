@@ -50,6 +50,17 @@ cp "$BIN" "$PKG/bin/"
 cp "$ROOT/assets/icon.png" "$PKG/assets/"
 cp "$ROOT/THIRD_PARTY_NOTICES.md" "$PKG/"
 
+# The index ships INSIDE the depot, so a first run is never blocked on the network for
+# anything but the model. `clappkit::paths::install_root()` finds it here by walking up to
+# clatch.json. `gturag sync` can still fetch a newer one from the repository, which is what
+# lets the corpus be refreshed without rebuilding the app.
+[ -f "$ROOT/corpus.gtu" ] || {
+    echo "package.sh: corpus.gtu is missing — build it first:" >&2
+    echo "  gturag index-corpus forms --model <dir> --built \$(date +%F)" >&2
+    exit 1
+}
+cp "$ROOT/corpus.gtu" "$PKG/"
+
 # Rewrite the manifest for THIS platform: a .clapp is per-OS-arch, so the depot advertises
 # only the binary it actually carries, and `cliBin` points at where that binary really is.
 # Scripts that hardcode `bin/<cli>` are wrong on one of the three platforms (PLAYBOOK §12) —

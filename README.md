@@ -1,4 +1,4 @@
-# GTÜ Formlar
+﻿# GTÜ Formlar
 
 Every form Gebze Teknik Üniversitesi publishes, on one screen you and your agent share.
 
@@ -9,7 +9,7 @@ search by **what you want to do** rather than by what the form is called.
 ```
 gturag search "danışman değiştirmek istiyorum"
 gturag open FR-0083
-gturag get FR-0083          # → a local path you can read or fill in
+gturag get FR-0083          # → the form's full text, for an agent to answer from
 ```
 
 Type `FR-0083` and that form wins outright. Type a sentence and it is found by meaning.
@@ -26,16 +26,43 @@ machine on first run — after that, retrieval is entirely local and works offli
 
 Retrieval is hybrid, in this order:
 
-1. **An exact form code is decisive.** A code is a name, not a topic; someone who types one
-   has already said what they want.
-2. **BM25** over the passage text, because half of what people type at a form registry is
+1. **An exact form code is decisive**, and answers alone. A code is a name, not a topic;
+   someone who types one has already said what they want, and padding that with two hundred
+   near-random results buries the answer.
+2. **Title coverage** — what fraction of the query's *achievable* terms the title contains,
+   squared. A form's title is its identity; a word in its body is a mention.
+3. **BM25** over the passage text, because half of what people type at a form registry is
    literal — *staj*, *yandal*, *mazeret*.
-3. **Dense cosine** over multilingual embeddings, because the other half is not literal at
+4. **Dense cosine** over multilingual embeddings, because the other half is not literal at
    all.
 
-(2) and (3) are fused by Reciprocal Rank Fusion, which reads only the ranks — BM25 scores
-are unbounded and cosines live in [-1,1], so any weighted sum of them is a constant nobody
-can tune honestly.
+(3) and (4) are fused by Reciprocal Rank Fusion, which reads only ranks — BM25 scores are
+unbounded and cosines live in [-1,1], so any weighted sum of them is a constant nobody can
+tune honestly. (2) is deliberately **not** in that fusion: RRF throws away magnitude, and
+with `k=60` a title matching every query term scores barely above one matching a quarter of
+them. That is not a subtlety — it is why `danışman değişikliği` once returned
+`Danışman Değişikliği Formu` fourth.
+
+Turkish gets two things it needs: `İ` folds to `i` (Rust's own `to_lowercase` produces `i`
+plus a combining dot, so `İZİN` never matched `izin`), and every word is indexed alongside
+a 5-character stem, because `danışmanımı` and `Danışman` share no token otherwise.
+
+## The repository is the database
+
+There is no server and no hosted vector store. This repo holds both halves:
+
+| | |
+|---|---|
+| `forms/FR-0083.tr.json` | one file per form — metadata and extracted text, ~2 KB each |
+| `corpus.gtu` | the built index: 791 documents, their passages, and the vectors |
+
+`forms/` is the source: reviewable, diffable, and small, so when GTÜ revises a form the
+change is visible in a pull request rather than buried in a binary. `corpus.gtu` is derived
+from it and **ships inside the `.clapp`**, so a first run is never blocked on the network
+for anything but the model.
+
+The original `.docx`/`.pdf` files are never committed and never shipped — only their text.
+The authoritative copies stay on the university's servers, and the app links to them.
 
 ## Installing
 
@@ -43,17 +70,18 @@ Requires [Clatch][clatch]. A clapp runs only under it.
 
 ```sh
 clatch install github:breksos/gturag-clapp
-clatch run com.gtu.rag
+clatch run com.breksos.gturag
 ```
 
-First launch downloads the embedding model (~450 MB) and the prebuilt index into the app's
-own data directory. There is nothing to configure — no key, no account, no file to edit.
-Search answers lexically while the model is still arriving.
+The index is already inside the app, so search works immediately — lexically. The only
+download is the embedding model (~465 MB, from HuggingFace), which switches on
+meaning-based search when it lands. There is nothing to configure: no key, no account, no
+file to edit.
 
 To let an agent drive it:
 
 ```sh
-clatch agent grant <agent> app:com.gtu.rag
+clatch agent grant <agent> app:com.breksos.gturag
 ```
 
 ## Building
@@ -77,41 +105,48 @@ forward deliberately.
 
 ## Rebuilding the corpus
 
-Two stages, deliberately split. Stage 1 is Python because prying text out of pre-2007
-Office files means driving LibreOffice, and that never ships. Stage 2 is the app's own
-binary because it must embed passages with **the same code that embeds queries** — a
-separate implementation would agree until it quietly didn't, and that failure is invisible.
+Two stages, deliberately split.
+
+**Stage 1 — refresh the database.** Python, because prying text out of pre-2007 Office
+files means driving LibreOffice, and that never ships:
 
 ```sh
-python tools/build-index/fetch.py                    # scrape → cull → download → extract
-gturag index-corpus tools/build-index/work \
-    --model tools/build-index/work/model \
-    --built 2026-08-12 --out corpus.gtu              # embed → write the index
+python tools/build-index/fetch.py       # scrape → cull → extract → forms/*.json
 ```
 
-Stage 1 keeps a document if it lives under the quality office's tree, and keeps only the
-highest revision of each form. Re-running it against the live page is what keeps
-"currently applied" true as the university revises documents. It reports what it culled
-and why, and it says so loudly when LibreOffice is absent rather than silently indexing
-153 documents by title alone.
+It keeps a document if it lives under the quality office's tree, and keeps only the highest
+revision of each form; anything the page no longer lists is **deleted** from `forms/`, so a
+withdrawn form stops being searchable. It reports what it culled and why, and says so
+loudly when LibreOffice is absent rather than silently indexing 153 documents by title
+alone. Commit the diff — that is the corpus update.
 
-`--built` is an input, not the clock, so two runs over the same corpus produce identical
-bytes.
+**Stage 2 — rebuild the index.** The app's own binary, because it must embed passages with
+**the same code that embeds queries**; a separate implementation would agree until it
+quietly didn't, and that failure is invisible:
+
+```sh
+gturag index-corpus forms --model <dir> --built 2026-08-13 --out corpus.gtu
+```
+
+Chunking happens here rather than in the scraper, so passage policy can change without
+re-scraping 791 documents or needing LibreOffice again. `--built` is an input, not the
+clock, so two runs over the same database produce byte-identical output.
+
+Users pick the new corpus up with `gturag sync`, which fetches `corpus.gtu` from the
+default branch — **no release required** to update the forms.
 
 ## Releasing
 
-A release carries the depot **and** the index:
+A release carries only the depots; the index rides inside each one:
 
 ```
-com.gtu.rag-windows-x64.clapp    the app  (binary + icon + manifest)
-com.gtu.rag-windows-x64.clapp.sha256
-corpus.gtu                       the index, fetched at first run
+com.breksos.gturag-windows-x64.clapp        binary + icon + manifest + corpus.gtu
+com.breksos.gturag-windows-x64.clapp.sha256
 ```
 
-They are separate so the depot stays small — a `.clapp` is per-OS-arch, and bundling the
-index would ship it once per platform — and so the corpus can be refreshed without
-rebuilding the app. Because the app fetches `releases/latest/download/corpus.gtu`, **every**
-release must attach one, including an app-only fix.
+Push a `v*` tag and `release.yml` builds one per platform. It needs no repository secret:
+clappkit pins the clatch crates over SSH, but the same repo is public over HTTPS, so a
+single `insteadOf` rewrite in the environment replaces the whole deploy-key problem.
 
 ## Licence
 

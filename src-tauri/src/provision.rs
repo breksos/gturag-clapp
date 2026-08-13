@@ -41,11 +41,21 @@ const MODEL_FILES: &[(&str, u64)] = &[
 /// check is the model card itself.
 const MODEL_BASE: &str = "https://huggingface.co/intfloat/multilingual-e5-small/resolve/main";
 
-/// Where the prebuilt index comes from. Set at build time so a fork points at its own
-/// release without touching code.
+/// Where a NEWER index comes from when the human asks for one. The depot already ships a
+/// working index (see [`bundled_index`]), so this is never on the first-run path — it is
+/// what makes `gturag sync` able to pick up a corpus GTÜ has revised without anyone
+/// rebuilding or reinstalling the app.
 pub const INDEX_URL: &str = match option_env!("GTURAG_INDEX_URL") {
     Some(u) => u,
-    None => "https://github.com/breksos/gturag-clapp/releases/latest/download/corpus.gtu",
+    None => "https://raw.githubusercontent.com/breksos/gturag-clapp/main/corpus.gtu",
+};
+
+/// The committed form database, one JSON file per form. `get` reads a form's full text
+/// from here — the index carries passages, which is what search needs, but an agent asked
+/// to fill a form in wants the whole document.
+pub const FORMS_BASE: &str = match option_env!("GTURAG_FORMS_BASE") {
+    Some(u) => u,
+    None => "https://raw.githubusercontent.com/breksos/gturag-clapp/main/forms",
 };
 
 pub fn model_dir(cli: &str) -> PathBuf {
@@ -173,54 +183,73 @@ pub fn fetch_index(cli: &str, mut progress: impl FnMut(Stage)) -> Result<Corpus>
     Ok(corpus)
 }
 
-/// Download one form to `<data>/files/`, and return where it landed.
+/// One form's full extracted text, from the committed database. Cached in the app's data
+/// directory after the first read — a form's text does not change under a fixed revision.
 ///
-/// The name is the university's own filename, not the caller's: `get` takes a form code,
-/// never a path, so there is no way for a caller to choose where this writes. Already
-/// downloaded is a cache hit — a form does not change under a fixed revision.
-pub fn fetch_document(cli: &str, url: &str, name: &str) -> Result<PathBuf> {
-    let dir = clappkit::data_subdir(cli, "files");
-    // Belt and braces: strip anything that could traverse, even though `name` comes from
-    // our own index rather than from the caller.
-    let safe: String = name
+/// This is what `get` answers with. The app deliberately does NOT download the original
+/// `.docx`/`.pdf`: the human is sent to the university's own page for that (the
+/// authoritative copy, always current), while an agent gets text it can actually read.
+pub fn fetch_form_text(cli: &str, id: &str) -> Result<String> {
+    // `id` comes from our own index, never from the caller, but it lands in a URL and a
+    // path — so it is still constrained to what an id can legitimately contain.
+    let safe: String = id
         .chars()
-        .map(|c| if std::path::is_separator(c) || c == ':' { '_' } else { c })
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_' || *c == '.')
         .collect();
-    let dest = dir.join(safe.trim_start_matches('.'));
-    if dest.is_file() && dest.metadata().map(|m| m.len() > 0).unwrap_or(false) {
-        return Ok(dest);
+    if safe.is_empty() || safe.contains("..") {
+        bail!("`{id}` is not a form id");
     }
-    // The page's hrefs carry raw UTF-8; the server wants them percent-encoded.
-    let encoded = url
-        .chars()
-        .flat_map(|c| {
-            if c.is_ascii_alphanumeric() || "-._~:/?#[]@!$&'()*+,;=%".contains(c) {
-                vec![c.to_string()]
-            } else {
-                let mut b = [0u8; 4];
-                c.encode_utf8(&mut b)
-                    .bytes()
-                    .map(|x| format!("%{x:02X}"))
-                    .collect()
-            }
-        })
-        .collect::<String>();
-    download(&encoded, &dest, 1, |_| {})?;
-    Ok(dest)
+
+    let dir = clappkit::data_subdir(cli, "forms");
+    let dest = dir.join(format!("{safe}.json"));
+    if !dest.is_file() {
+        download(&format!("{FORMS_BASE}/{safe}.json"), &dest, 4096, |_| {})
+            .with_context(|| format!("fetching the text of {safe}"))?;
+    }
+
+    let raw = std::fs::read_to_string(&dest)
+        .with_context(|| format!("cannot read {}", dest.display()))?;
+    let form: serde_json::Value = serde_json::from_str(&raw).map_err(|e| {
+        // A GitHub 404 is an HTML page delivered with every appearance of success.
+        let _ = std::fs::remove_file(&dest);
+        anyhow::anyhow!("the stored form will not parse ({e})")
+    })?;
+    Ok(form
+        .get("text")
+        .and_then(|t| t.as_str())
+        .unwrap_or_default()
+        .to_string())
 }
 
-/// Load an index already on disk, if there is a usable one. A damaged file is moved aside
-/// rather than left to fail identically on every launch.
+/// The index that ships inside the depot — the baseline every install starts from, so a
+/// first run is never blocked on the network for anything but the model.
+pub fn bundled_index() -> Option<PathBuf> {
+    let path = clappkit::paths::install_root().join(INDEX_FILE);
+    path.is_file().then_some(path)
+}
+
+/// The best index available without downloading: a synced one from the data directory if
+/// the human has ever run `sync`, otherwise the one that shipped in the depot.
+///
+/// A damaged cached file is moved aside rather than left to fail identically on every
+/// launch — and because the depot's copy is still there, that degrades to "you lost your
+/// update", not "the app no longer works".
 pub fn load_cached_index(cli: &str) -> Option<Corpus> {
-    let path = index_path(cli);
-    if !path.is_file() {
-        return None;
+    let synced = index_path(cli);
+    if synced.is_file() {
+        match Corpus::read(&synced) {
+            Ok(c) => return Some(c),
+            Err(e) => {
+                eprintln!("gturag: the synced index is unusable ({e}) — falling back to the bundled one");
+                clappkit::store::quarantine(&synced);
+            }
+        }
     }
-    match Corpus::read(&path) {
+    let bundled = bundled_index()?;
+    match Corpus::read(&bundled) {
         Ok(c) => Some(c),
         Err(e) => {
-            eprintln!("gturag: the cached index is unusable ({e})");
-            clappkit::store::quarantine(&path);
+            eprintln!("gturag: the bundled index is unusable ({e})");
             None
         }
     }

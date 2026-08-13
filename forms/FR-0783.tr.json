@@ -1,0 +1,11 @@
+{
+ "code": "FR-0783",
+ "ext": "xlsx",
+ "id": "FR-0783.tr",
+ "lang": "tr",
+ "name": "FR-0783 Olay Yeri Analiz Raporu Formu R1.xlsx",
+ "rev": 1,
+ "text": "İSG UZMANI\n91\n90 | 3 | Yangın | 93 | 100\n101\n92\n79\n97\n28 | 82 | Gözlük | O | Baret | 82 | Kolluk | 81\n82 | Eldiven | O | İş Elbisesi | 82 | Önlük\n82 | Ayakkabı | O | Kulaklık | 82 | Emniyet Kemeri | 102 | 88\n82 | Maske | O | Çizme | 82 | Diğer:\n1\n83 | O | Tesis Hasarı | O Malzeme Kaybı | O İş Kazası | Patlama | O | Çevre Hasarı\n103 | O | Kimyasala maruziyet | O Yakın kaza | O Meslek Hastalığı\nOLAY YERİ EKİPMANLARI | Olay yerinde kullanılan ekipman ve olay yerinin durumu: | 6 | 1\n7 | 17\n8 | 18\n9 | 19\n10 | 20\n80 | 21\n11 | 22\n12 | 23\n13 | 24\n14 | 25\n15 | 26\n16 | 27\n40 | 41 | 73\n42 | 52 | 62 | 74\n43 | 53 | 63 | 75\n44 | 54 | 64 | 76\n45 | 55 | 65 | 77\n46 | 56 | 66 | 72\n61 | 57 | 67 | 78\n23 | 58 | 68 | 0\n47 | 59 | 69\n48 | 60 | 70\n49 | 71\n50 | 89\n51\nForm No:FR-0783 Yayın Tarihi:05.08.2024 Değ.No:1 Değ.Tarihi: 23.06.2026",
+ "title": "Olay Yeri Analiz Raporu Formu",
+ "url": "https://www.gtu.edu.tr/fileman/Files/UserFiles/kalite/Formlar/Formlar-Türkçe/FR-0783 Olay Yeri Analiz Raporu Formu R1.xlsx"
+}

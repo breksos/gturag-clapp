@@ -19,8 +19,9 @@ mod index;
 mod provision;
 mod state;
 
-/// Must equal `clatch.json`'s `id`; `bootstrap` hard-errors on a mismatch.
-const APP_ID: &str = "com.gtu.rag";
+/// Must equal `clatch.json`'s `id`; `bootstrap` hard-errors on a mismatch. A test in
+/// `cli.rs` reads the real manifest and asserts these agree, so the two cannot drift.
+const APP_ID: &str = "com.breksos.gturag";
 /// The CLI shorthand — `connector.cli`. It keys the IPC address and prefixes every fatal
 /// error, so it reads like the rest of what the agent sees: `gturag: <what went wrong>`.
 const CLI: &str = "gturag";
