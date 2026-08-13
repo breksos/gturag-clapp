@@ -72,13 +72,21 @@ fn read_forms(dir: &Path) -> Result<Vec<Form>> {
 /// can find.
 fn chunk(title: &str, body: &str) -> Vec<String> {
     let body = body.trim();
+    // The title, on its own, is always the first passage.
+    //
+    // Every other passage is `title + body`, and these bodies are near-identical across
+    // the corpus: ADI SOYADI, İMZA, UYGUNDUR, a table of blanks. That boilerplate dominates
+    // the embedding, so 791 forms come out looking alike to the dense retriever and a
+    // query about advisors ranks a nutrition-counselling form first. A passage that is
+    // ONLY the title gives each form one vector that means what the form is, uncontaminated
+    // by the paperwork around it.
+    let mut out = vec![title.to_string()];
     if body.is_empty() {
-        return vec![title.to_string()];
+        return out;
     }
     // Character indices, because Turkish text is not one byte per character and slicing a
     // UTF-8 string on a byte boundary panics.
     let chars: Vec<char> = body.chars().collect();
-    let mut out = Vec::new();
     let mut start = 0;
     while start < chars.len() {
         let mut end = (start + MAX_CHARS).min(chars.len());
@@ -100,9 +108,6 @@ fn chunk(title: &str, body: &str) -> Vec<String> {
             break;
         }
         start = end.saturating_sub(OVERLAP).max(start + 1);
-    }
-    if out.is_empty() {
-        out.push(title.to_string());
     }
     out
 }
@@ -217,6 +222,16 @@ mod tests {
         let chunks = chunk("Danışman Değişikliği Formu", &body);
         assert!(chunks.len() > 1, "a long body must split");
         assert!(chunks.iter().all(|c| c.starts_with("Danışman Değişikliği Formu")));
+    }
+
+    /// The first passage is the title ALONE — one vector per form that means what the form
+    /// is, rather than what every form's paperwork looks like.
+    #[test]
+    fn the_first_passage_is_the_bare_title() {
+        let chunks = chunk("Danışman Değişikliği Formu", "ADI SOYADI\nİMZA\nUYGUNDUR");
+        assert_eq!(chunks[0], "Danışman Değişikliği Formu");
+        assert!(chunks.len() > 1, "the body must still be indexed too");
+        assert!(chunks[1].contains("ADI SOYADI"));
     }
 
     #[test]

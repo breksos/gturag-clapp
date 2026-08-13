@@ -429,17 +429,31 @@ impl Index {
             // Collapse chunk-level lists to their documents, keeping each document's best
             // passage as the snippet.
             for list in [&body, &dense] {
+                // Each list contributes a document's BEST chunk once, not every chunk it
+                // has. Summing per chunk lets length buy rank: a long protocol with ten
+                // passages in the top 200 collects ~0.15 while a short form whose title IS
+                // the query collects 0.07, so `zorunlu staj başvurusu` ranked
+                // `Zorunlu Staj Stajyeri Bilgi Formu` — the only title containing that
+                // phrase — third. Retrieval must answer "is this form about it?", not
+                // "how many pages does it have?".
+                let mut best_rank: HashMap<usize, usize> = HashMap::new();
                 for (rank, (chunk, _)) in list.iter().enumerate() {
                     let doc = corpus.chunks()[*chunk].doc as usize;
+                    best_rank.entry(doc).or_insert(rank);
+
+                    // Passage COLLECTION is separate and still per chunk: one that placed
+                    // in both lists is the most worth showing a human, and this is only
+                    // deciding what to display, never what to rank.
                     let contribution = 1.0 / (RRF_K + rank as f32 + 1.0);
                     let entry = fused.entry(doc).or_insert_with(|| (0.0, Vec::new()));
-                    entry.0 += contribution;
-                    // Passages accumulate rather than compete: one that placed in BOTH the
-                    // lexical and the semantic list is the most worth showing a human, and
-                    // keeping only a single best would throw that agreement away.
                     match entry.1.iter_mut().find(|(c, _)| c == chunk) {
                         Some(slot) => slot.1 += contribution,
                         None => entry.1.push((*chunk, contribution)),
+                    }
+                }
+                for (doc, rank) in best_rank {
+                    if let Some(entry) = fused.get_mut(&doc) {
+                        entry.0 += 1.0 / (RRF_K + rank as f32 + 1.0);
                     }
                 }
             }
@@ -716,6 +730,41 @@ mod tests {
             c.docs()[hits[0].doc].title,
             "Danışman Değişikliği Formu",
             "the form whose TITLE is the query must win; got {:?}",
+            hits.iter().map(|h| &c.docs()[h.doc].title).collect::<Vec<_>>()
+        );
+    }
+
+    /// Length must not buy rank. A long document has many passages and therefore many
+    /// chances to appear in a candidate list; if each one added score, the ranking would
+    /// answer "how long is this form?" instead of "is it about the query?".
+    #[test]
+    fn a_long_document_does_not_outrank_a_short_one_by_sheer_bulk() {
+        let mut c = corpus();
+        c.header.docs.push(doc("FR-0744.tr", Some("FR-0744"), "tr", "Sektör Stajı Protokolü"));
+        // Twelve passages, every one of them mentioning the query's words.
+        for ord in 0..12u32 {
+            c.header.chunks.push(Chunk {
+                doc: 3,
+                ord,
+                text: "Sektör Stajı Protokolü zorunlu staj hükümleri madde".into(),
+            });
+            c.vectors.extend([0.0, 0.0, 0.0]);
+        }
+        // ...against one short form whose TITLE is what was asked for.
+        c.header.docs.push(doc("FR-0751.tr", Some("FR-0751"), "tr", "Zorunlu Staj Stajyeri Bilgi Formu"));
+        c.header.chunks.push(Chunk {
+            doc: 4,
+            ord: 0,
+            text: "Zorunlu Staj Stajyeri Bilgi Formu".into(),
+        });
+        c.vectors.extend([0.0, 0.0, 0.0]);
+
+        let idx = Index::build(&c);
+        let hits = idx.search(&c, "zorunlu staj", None, Sort::Relevance, 5);
+        assert_eq!(
+            c.docs()[hits[0].doc].code.as_deref(),
+            Some("FR-0751"),
+            "the short exact-title form must win; got {:?}",
             hits.iter().map(|h| &c.docs()[h.doc].title).collect::<Vec<_>>()
         );
     }
