@@ -66,7 +66,16 @@ pub struct Hit {
     pub why: Why,
     /// The passage that matched best — what the window shows under the title.
     pub snippet: String,
+    /// The other passages of this form that also matched, best first. The window shows
+    /// them so a human can see WHERE in a document the answer is, rather than trusting one
+    /// excerpt the ranker happened to prefer.
+    pub passages: Vec<String>,
 }
+
+/// How many passages of one form the window will show. Enough to see where a form talks
+/// about the thing you asked for; few enough that one long spreadsheet cannot push every
+/// other result off the screen.
+const PASSAGES_SHOWN: usize = 3;
 
 /// How results are ordered. This is STATE, not a per-call argument: a sort that only
 /// reorders the page the caller happens to hold is a lie about the data underneath it
@@ -357,6 +366,9 @@ impl Index {
                         score: f32::INFINITY,
                         why: Why::Code,
                         snippet: first_chunk(corpus, i),
+                        // A code match is an identity, not a text match — there is no
+                        // "where it matched" to point at.
+                        passages: Vec::new(),
                     });
                 }
             }
@@ -375,8 +387,8 @@ impl Index {
         }
 
         if !terms.is_empty() || query_vec.is_some() {
-            // (fused score, best chunk, that chunk's own best contribution)
-            let mut fused: HashMap<usize, (f32, usize, f32)> = HashMap::new();
+            // doc → (fused score, every passage that contributed and by how much)
+            let mut fused: HashMap<usize, (f32, Vec<(usize, f32)>)> = HashMap::new();
 
             // 2a. TITLES, scored by COVERAGE rather than by rank.
             //
@@ -394,7 +406,7 @@ impl Index {
                 let coverage = self.title.coverage(doc, &terms);
                 let entry = fused
                     .entry(doc)
-                    .or_insert((0.0, first_chunk_of(corpus, doc), 0.0));
+                    .or_insert_with(|| (0.0, vec![(first_chunk_of(corpus, doc), 0.0)]));
                 entry.0 += TITLE_WEIGHT * coverage * coverage;
             }
 
@@ -420,33 +432,38 @@ impl Index {
                 for (rank, (chunk, _)) in list.iter().enumerate() {
                     let doc = corpus.chunks()[*chunk].doc as usize;
                     let contribution = 1.0 / (RRF_K + rank as f32 + 1.0);
-                    let entry = fused.entry(doc).or_insert((0.0, *chunk, 0.0));
+                    let entry = fused.entry(doc).or_insert_with(|| (0.0, Vec::new()));
                     entry.0 += contribution;
-                    // The passage to SHOW is the one that placed highest in either list —
-                    // which is not the same as the last one seen, and a document's whole
-                    // score is not the right thing to compare a single chunk against.
-                    if contribution > entry.2 {
-                        entry.1 = *chunk;
-                        entry.2 = contribution;
+                    // Passages accumulate rather than compete: one that placed in BOTH the
+                    // lexical and the semantic list is the most worth showing a human, and
+                    // keeping only a single best would throw that agreement away.
+                    match entry.1.iter_mut().find(|(c, _)| c == chunk) {
+                        Some(slot) => slot.1 += contribution,
+                        None => entry.1.push((*chunk, contribution)),
                     }
                 }
             }
 
-            let mut ranked: Vec<(usize, f32, usize)> =
-                fused.into_iter().map(|(d, (s, c, _))| (d, s, c)).collect();
+            let mut ranked: Vec<(usize, f32, Vec<(usize, f32)>)> =
+                fused.into_iter().map(|(d, (s, c))| (d, s, c)).collect();
             ranked.sort_by(|a, b| b.1.total_cmp(&a.1));
 
-            for (doc, score, chunk) in ranked {
+            for (doc, score, mut matched) in ranked {
                 if placed.contains_key(&doc) {
                     continue; // already in, by code — nothing may outrank that
                 }
+                matched.sort_by(|a, b| b.1.total_cmp(&a.1));
+                let passages: Vec<String> = matched
+                    .iter()
+                    .take(PASSAGES_SHOWN)
+                    .map(|(c, _)| corpus.chunks()[*c].text.clone())
+                    .collect();
+                let snippet = passages
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| first_chunk(corpus, doc));
                 placed.insert(doc, hits.len());
-                hits.push(Hit {
-                    doc,
-                    score,
-                    why: Why::Match,
-                    snippet: corpus.chunks()[chunk].text.clone(),
-                });
+                hits.push(Hit { doc, score, why: Why::Match, snippet, passages });
             }
         }
 

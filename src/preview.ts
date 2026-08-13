@@ -33,6 +33,10 @@ function doc(
     score: 0.03,
     why: "match",
     snippet: `${title}\nBu form, ilgili birime elden ya da e-posta ile iletilir. İki nüsha doldurulur.`,
+    passages: [
+      `${title}\nBu form, ilgili birime elden ya da e-posta ile iletilir. İki nüsha doldurulur.`,
+      `${title}\nDanışman değişikliği, öğrencinin ve/veya danışmanın başvurusu üzerine yapılabilir.`,
+    ],
     ...extra,
   };
 }
@@ -54,6 +58,10 @@ const BASE: Snapshot = {
   ...EMPTY,
   rev: 1,
   query: "danışman değiştirmek istiyorum",
+  // What `index::tokenize` produces for that query: every word AND its 5-character stem.
+  // Highlighting must be checked against the real shape, or the preview would show marks
+  // the running app never draws (and miss the stem matches it does).
+  terms: ["danışman", "danış", "değiştirmek", "değiş", "istiyorum", "istiy"],
   results: RESULTS,
   total: RESULTS.length,
   open: RESULTS[0],

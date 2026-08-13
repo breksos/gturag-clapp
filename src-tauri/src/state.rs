@@ -254,6 +254,9 @@ impl AppState {
             "score": hit.map(|h| if h.score.is_finite() { h.score } else { 1.0 }),
             "why": hit.map(|h| h.why),
             "snippet": hit.map(|h| h.snippet.clone()),
+            // Where in this form the query was found. The window shows these and marks the
+            // matched words inside them.
+            "passages": hit.map(|h| h.passages.clone()).unwrap_or_default(),
         })
     }
 
@@ -282,6 +285,10 @@ impl AppState {
         json!({
             "ok": true,
             "query": self.query,
+            // The terms the INDEX actually matched on, stems included — so the window
+            // highlights what was really found rather than doing a naive substring search
+            // that would miss `danışman` inside a query for `danışmanımı`.
+            "terms": index::tokenize(&self.query),
             "sort": self.sort.as_str(),
             "results": results,
             "total": self.results.len(),

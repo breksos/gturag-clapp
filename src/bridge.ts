@@ -23,6 +23,8 @@ export type Doc = {
   score: number | null;
   why: Why | null;
   snippet: string | null;
+  /** Where in this form the query was found, best first. */
+  passages: string[];
 };
 
 export type Stage =
@@ -41,6 +43,9 @@ export type Agent = {
 
 export type Snapshot = Snapshotish & {
   query: string;
+  /** The terms the index matched on — words AND their stems. Highlighting uses these
+   *  rather than the raw query, so `danışmanımı` correctly marks `Danışman` in a title. */
+  terms: string[];
   sort: "relevance" | "code" | "title";
   results: Doc[];
   total: number;
@@ -67,10 +72,27 @@ export type Cmd =
   | { cmd: "sort"; by: string }
   | { cmd: "sync" };
 
+/** The stem length index.rs truncates to. A term at least this long may match a word by
+ *  prefix; anything shorter must match the whole word, or `ad` would light up `adres`. */
+export const STEM_LEN = 5;
+
+/** Turkish-aware fold, matching `index::tokenize` exactly: `I`→`ı`, `İ`→`i`. JavaScript's
+ *  `toLocaleLowerCase("tr")` does this; the default locale does not. */
+export function fold(s: string): string {
+  return s.toLocaleLowerCase("tr");
+}
+
+/** Does this word count as a match for one of the index's terms? */
+export function isMatch(word: string, terms: string[]): boolean {
+  const w = fold(word);
+  return terms.some((t) => w === t || (t.length >= STEM_LEN && w.startsWith(t)));
+}
+
 export const EMPTY: Snapshot = {
   ok: true,
   rev: -1,
   query: "",
+  terms: [],
   sort: "relevance",
   results: [],
   total: 0,
@@ -91,9 +113,10 @@ function normalize(raw: Snapshot): Snapshot {
   return {
     ...EMPTY,
     ...raw,
-    results: raw.results ?? [],
-    saved: raw.saved ?? [],
+    results: (raw.results ?? []).map((d) => ({ ...d, passages: d.passages ?? [] })),
+    saved: (raw.saved ?? []).map((d) => ({ ...d, passages: d.passages ?? [] })),
     agents: raw.agents ?? [],
+    terms: raw.terms ?? [],
     provision: raw.provision ?? EMPTY.provision,
   };
 }
