@@ -24,3 +24,6 @@ tools/build-index/out/
 # the database: `forms/*.json` is the reviewable source and corpus.gtu is the built index
 # the depot ships and `gturag sync` fetches. It is ~6 MB and changes only when the corpus
 # is rebuilt.
+
+# Python bytecode from the maintainer scripts.
+__pycache__/

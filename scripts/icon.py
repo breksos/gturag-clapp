@@ -28,8 +28,12 @@ SVG = ROOT / "assets" / "icon.svg"
 PNG = ROOT / "assets" / "icon.png"
 ICONS = ROOT / "src-tauri" / "icons"
 SIDE = 1024
-# Windows picks a different size per context, and a scaled-down 256 looks it.
-ICO_SIZES = [16, 24, 32, 48, 64, 128, 256]
+# The Windows shell size set, in full. Windows picks a different bitmap per context and
+# scales the nearest one when the exact size is absent — and a 40px taskbar icon resampled
+# from 48 looks resampled. 16/32/48/256 are the classic four; 20/24/40/64/96 are the ones
+# 125%/150%/175%/200% display scaling actually asks for, and 128 is what the extra-large
+# Explorer view uses.
+ICO_SIZES = [16, 20, 24, 32, 40, 48, 64, 96, 128, 256]
 
 
 def soffice() -> str:

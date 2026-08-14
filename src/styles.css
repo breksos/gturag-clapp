@@ -1,43 +1,80 @@
-/* GTÜ Formlar wears the university's own colours, read from gtu.edu.tr's live stylesheet
-   rather than from memory (PLAYBOOK §3): navy #1a3b79 with the orange accent #f26522.
-   There is no shared clapp theme to inherit and nothing to keep in sync — each clapp is
-   on-brand for the thing it is about. */
+/* GTÜ Formlar — a brutalist surface for a registry of official paperwork.
+   ------------------------------------------------------------------------------------
+   The three accents are the emblem's OWN colours, measured from the mark this app wears:
+   navy #1a3476, crimson #cd1239, orange #f58612. When the logo sits in the header, the
+   interface either agrees with it exactly or looks like a near-miss, and a near-miss is
+   worse than a contrast.
+
+   The rules of the surface, applied without exception — one exception is what makes a
+   brutalist layout read as an unfinished one instead of a deliberate one:
+
+     * No rounded corners. Anywhere. Radius is 0.
+     * NO SHADOWS. Not blurred ones, not hard offset ones. Structure is stated by rules
+       and by fills; depth is not simulated at all. A brutalist surface is flat because it
+       is honest about being flat, and a drop shadow is the opposite of that.
+     * Every surface is bounded by the same 2px rule. The rule is a slate, not black:
+       2px of pure black on pure white on every element in the window is not "high
+       contrast", it is noise, and it makes the one thing that SHOULD shout — the matched
+       term, the open form — indistinguishable from the furniture.
+     * No gradients and no translucency. A colour is a colour.
+     * Machine data — form codes, revisions, counts, percentages — is monospace. Prose is
+       not. That split is the whole typographic system.
+     * Labels are uppercase and letterspaced; content is sentence case. */
 
 :root {
-  --navy-900: #0f2350;
-  --navy-800: #152d5c;
-  --navy-700: #1a3b79;
-  --navy-600: #2a4f96;
-  --navy-400: #6f92d8;
-  --orange: #f26522;
-  --orange-soft: #ffb083;
+  /* The emblem's own three, unmodified. */
+  --navy: #1a3476;
+  --crimson: #cd1239;
+  --orange: #f58612;
 
-  --bg: #f4f6fb;
-  --surface: #ffffff;
-  --surface-2: #eef1f8;
-  --line: #dde3ef;
-  --text: #14203a;
-  --muted: #5d6b87;
-  --accent: var(--navy-700);
-  --mark-bg: #ffe0b8;
-  --mark-text: #7a3300;
-  --shadow-sm: 0 1px 2px rgba(15, 35, 80, 0.05);
-  --shadow: 0 2px 4px rgba(15, 35, 80, 0.06), 0 12px 28px rgba(15, 35, 80, 0.07);
+  /* What the mark is actually drawn with. Same values in light mode — see the dark block
+     for why these are variables at all. */
+  --emblem-navy: var(--navy);
+  --emblem-crimson: var(--crimson);
+  --emblem-orange: var(--orange);
+
+  --paper: #ffffff;
+  --paper-2: #f5f6f9;
+  --line: #c4cbd9;         /* every border */
+  --line-strong: #9099ac;  /* borders that need to lead */
+  --text: #222834;
+  --muted: #616b7d;
+  --accent: var(--navy);
+  --crimson-text: var(--crimson);
+  --mark-bg: #ffdcae;
+  --mark-text: #603200;
+  --invert-bg: var(--navy);
+  --invert-text: #ffffff;
+
+  --rule: 2px solid var(--line);
+  --rule-strong: 2px solid var(--line-strong);
+
+  --mono: "SF Mono", ui-monospace, "Cascadia Mono", "Roboto Mono", Consolas, monospace;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #0b1222;
-    --surface: #141d33;
-    --surface-2: #1c273f;
-    --line: #27334f;
-    --text: #e8edf8;
-    --muted: #94a2c0;
-    --accent: #8aa8e6;
-    --mark-bg: #6a3a12;
-    --mark-text: #ffd9b3;
-    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
-    --shadow: 0 2px 4px rgba(0, 0, 0, 0.35), 0 12px 28px rgba(0, 0, 0, 0.32);
+    --paper: #161a21;
+    --paper-2: #101319;
+    --line: #333b4a;
+    --line-strong: #59637a;
+    --text: #dde3ee;
+    --muted: #8e98ab;
+    /* Navy at #1a3476 on this paper is 1.6:1 — unreadable as type. Type moves along the
+       same hue rather than to some unrelated blue. */
+    --accent: #8fa9e8;
+    --crimson-text: #ff8098;
+    --mark-bg: #6d4413;
+    --mark-text: #ffdcae;
+    --invert-bg: #8fa9e8;
+    --invert-text: #101319;
+
+    /* And the MARK moves too — only its navy, and only here. The wings are the same 1.6:1
+       against this paper, so half the butterfly would simply not be there. Standing the
+       logo on a white plate was the alternative, and that puts a box in the middle of the
+       interface; lifting one channel of the mark is the smaller lie. Crimson and orange
+       are left exactly as the university draws them. */
+    --emblem-navy: #5f80d4;
   }
 }
 
@@ -45,64 +82,66 @@
 html, body, #root { height: 100%; margin: 0; }
 
 body {
-  background:
-    radial-gradient(1100px 420px at 50% -180px, rgba(42, 79, 150, 0.13), transparent 70%),
-    var(--bg);
+  background: var(--paper-2);
   color: var(--text);
-  font: 14px/1.55 "Inter", "Segoe UI", system-ui, -apple-system, sans-serif;
+  font: 14px/1.5 "Inter", "Segoe UI", system-ui, -apple-system, sans-serif;
   -webkit-font-smoothing: antialiased;
 }
 
-button { font: inherit; cursor: pointer; }
+button { font: inherit; cursor: pointer; border-radius: 0; }
+input { border-radius: 0; }
 
 .app { height: 100%; display: flex; flex-direction: column; }
 
+/* Reused enough to be worth naming: the uppercase, letterspaced micro-label. */
+.count,
+.detail-passages h4,
+.badge,
+.sorts button,
+.detail-actions a,
+.detail-actions button,
+.retry {
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-weight: 700;
+}
+
 /* ---- the mark ---------------------------------------------------------- */
 
-.butterfly .wing-left,
-.butterfly .wing-right { fill: var(--navy-700); }
-.butterfly .wing-right { fill: var(--navy-600); }
-.butterfly .body { fill: var(--orange); stroke: var(--orange); }
-.butterfly.muted .wing-left,
-.butterfly.muted .wing-right { fill: var(--line); }
-.butterfly.muted .body { fill: var(--muted); stroke: var(--muted); opacity: 0.5; }
+/* No plate, no border, no shadow: the emblem sits directly on the page. It can, because
+   its fills are theme-aware (see --emblem-navy). */
+.emblem { display: block; flex: none; }
+.hero .emblem { margin-inline: auto; }
 
-/* A slow, barely-there wingbeat. Never on the hero when the user prefers less motion. */
-@keyframes flutter {
-  0%, 100% { transform: rotateY(0deg); }
-  50%      { transform: rotateY(24deg); }
-}
-.hero .butterfly .wing-left  { transform-origin: 24px 24px; animation: flutter 5.5s ease-in-out infinite; }
-.hero .butterfly .wing-right { transform-origin: 24px 24px; animation: flutter 5.5s ease-in-out infinite reverse; }
-@media (prefers-reduced-motion: reduce) {
-  .hero .butterfly .wing-left, .hero .butterfly .wing-right { animation: none; }
-}
+/* Watermark for the empty detail pane. Desaturating and fading changes no colour
+   RELATIONSHIP — it is the mark, quieter — where re-filling the paths would not be. */
+.emblem.muted { filter: grayscale(1); opacity: 0.3; margin-inline: auto; }
 
 /* ---- header ------------------------------------------------------------ */
 
 .header {
   display: flex; align-items: center; justify-content: space-between;
   padding: 12px 20px;
-  border-bottom: 1px solid var(--line);
-  background: var(--surface);
-  box-shadow: var(--shadow-sm);
+  border-bottom: var(--rule);
+  background: var(--paper);
 }
 
-.brand { display: flex; align-items: center; gap: 10px; }
-.brandtext { display: flex; flex-direction: column; line-height: 1.25; }
+.brand { display: flex; align-items: center; gap: 12px; }
+.brandtext { display: flex; flex-direction: column; gap: 2px; line-height: 1.2; }
 
 .wordmark {
-  font-weight: 800; font-size: 15px; letter-spacing: -0.015em;
-  color: var(--accent);
+  font-weight: 800; font-size: 15px;
+  text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--text);
 }
-.corpus { color: var(--muted); font-size: 11.5px; }
+.corpus { color: var(--muted); font-size: 11px; font-family: var(--mono); }
 
 .agents { display: flex; }
 .agent img, .agent .monogram {
-  width: 28px; height: 28px; border-radius: 50%;
+  width: 28px; height: 28px;
   display: grid; place-items: center; object-fit: cover;
-  border: 2px solid var(--surface); margin-left: -7px;
-  color: #fff; font-size: 12px; font-weight: 700;
+  border: var(--rule); margin-left: -2px;
+  color: #fff; font-size: 12px; font-weight: 800;
 }
 
 /* ---- stage ------------------------------------------------------------- */
@@ -110,225 +149,227 @@ button { font: inherit; cursor: pointer; }
 .stage {
   flex: 1; min-height: 0;
   display: flex; flex-direction: column;
-  padding: 16px 20px 0;
-  gap: 12px;
+  padding: 20px 20px 0;
+  gap: 16px;
 }
 
 /* At rest the search bar is the page, the way a search engine's front door is. Once there
    are results it shrinks to a header and the results own the screen. */
-.app.resting .stage { justify-content: flex-start; padding-top: 8vh; }
-.app.resting .searchbar { max-width: 720px; margin: 0 auto; }
+.app.resting .stage { justify-content: flex-start; padding-top: 9vh; }
+.app.resting .searchbar { max-width: 660px; margin: 0 auto; }
 
-.hero { text-align: center; margin-bottom: 22px; }
+.hero { text-align: center; margin-bottom: 26px; }
 .hero h1 {
-  margin: 14px 0 6px;
-  font-size: 26px; font-weight: 800; letter-spacing: -0.02em;
-  color: var(--accent);
+  margin: 20px 0 8px;
+  font-size: 30px; font-weight: 800; line-height: 1.15;
+  letter-spacing: -0.02em; text-transform: uppercase;
+  color: var(--text);
 }
 .hero p { margin: 0 auto; max-width: 520px; color: var(--muted); font-size: 13.5px; }
 .hero code {
-  background: var(--surface-2); padding: 1px 6px; border-radius: 5px;
-  font-family: ui-monospace, monospace; font-size: 12.5px; color: var(--accent);
+  background: var(--mark-bg); color: var(--mark-text);
+  padding: 1px 6px; font-family: var(--mono); font-size: 12.5px; font-weight: 700;
 }
 
 /* ---- the search bar ---------------------------------------------------- */
 
 .searchbar {
-  display: flex; align-items: center; gap: 11px;
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: 26px;
+  display: flex; align-items: center; gap: 12px;
+  background: var(--paper);
+  border: var(--rule-strong);
   padding: 0 16px;
-  box-shadow: var(--shadow);
   color: var(--muted);
-  transition: border-color 120ms, box-shadow 120ms;
 }
-.searchbar:focus-within {
-  border-color: var(--navy-400);
-  box-shadow: 0 0 0 4px rgba(42, 79, 150, 0.13), var(--shadow);
-}
+/* Focus darkens the rule. No ring, no lift, nothing to animate — the border is already
+   the element's whole visual identity, so it is the thing that should change. */
+.searchbar:focus-within { border-color: var(--accent); color: var(--text); }
 .searchbar input {
   flex: 1; border: 0; outline: 0; background: transparent;
-  color: var(--text); font-size: 15px; padding: 14px 0;
+  color: var(--text); font-size: 15px; padding: 15px 0;
 }
-.searchbar input::placeholder { color: var(--muted); opacity: 0.8; }
+.searchbar input::placeholder { color: var(--muted); }
 .clear {
   border: 0; background: transparent; color: var(--muted);
-  font-size: 21px; line-height: 1; padding: 4px 6px; border-radius: 50%;
+  font-size: 20px; line-height: 1; padding: 4px 8px;
 }
-.clear:hover { background: var(--surface-2); color: var(--text); }
+.clear:hover { background: var(--paper-2); color: var(--text); }
 
 /* ---- provisioning ------------------------------------------------------ */
 
 .provision {
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-left: 3px solid var(--orange);
-  border-radius: 10px; padding: 10px 13px;
-  display: flex; flex-direction: column; gap: 8px; font-size: 13px;
+  background: var(--paper);
+  border: var(--rule);
+  border-left: 6px solid var(--orange);
+  padding: 12px 14px;
+  display: flex; flex-direction: column; gap: 10px; font-size: 13px;
 }
-.provision.failed { border-left-color: #d64545; }
+.provision.failed { border-left-color: var(--crimson); }
+/* NOT uppercased, unlike every other label here, for two reasons. It is a sentence rather
+   than a label — and it is the one string in this window that arrives in English, from the
+   core's `Provision::summary`. The document is `lang="tr"`, so CSS uppercasing applies
+   Turkish casing to it and "downloading the index" comes out "DOWNLOADİNG THE İNDEX". */
+.provision-text strong { font-size: 13px; font-weight: 700; }
 .provision-text span { color: var(--muted); }
-.bar { height: 5px; background: var(--surface-2); border-radius: 999px; overflow: hidden; }
-.fill {
-  height: 100%; border-radius: 999px;
-  background: linear-gradient(90deg, var(--orange), var(--orange-soft));
-  transition: width 160ms linear;
-}
+.bar { height: 8px; background: var(--paper-2); border: var(--rule); }
+.fill { height: 100%; background: var(--orange); transition: width 160ms linear; }
 .retry {
-  align-self: flex-start; border: 1px solid var(--line);
-  background: var(--surface-2); color: var(--text);
-  border-radius: 8px; padding: 5px 12px;
+  align-self: flex-start; border: var(--rule-strong);
+  background: var(--paper); color: var(--text);
+  padding: 7px 14px; font-size: 11px;
 }
+.retry:hover { border-color: var(--accent); color: var(--accent); }
 
 /* ---- panes ------------------------------------------------------------- */
 
 .panes {
   flex: 1; min-height: 0;
-  display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 16px;
-  padding-bottom: 16px;
+  display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 20px;
+  padding-bottom: 20px;
 }
 @media (max-width: 940px) { .panes { grid-template-columns: minmax(0, 1fr); } }
 
 .results, .detail { min-height: 0; overflow-y: auto; }
-.detail { display: flex; flex-direction: column; gap: 12px; }
+.detail { display: flex; flex-direction: column; gap: 16px; }
 
 .toolbar {
   display: flex; align-items: center; justify-content: space-between;
-  padding: 0 2px 10px; position: sticky; top: 0; z-index: 1;
-  background: linear-gradient(var(--bg) 70%, transparent);
+  padding: 0 0 12px; position: sticky; top: 0; z-index: 1;
+  background: var(--paper-2);
+  border-bottom: var(--rule); margin-bottom: 14px;
 }
-.count { color: var(--muted); font-size: 12px; font-weight: 600; }
-.sorts { display: flex; gap: 4px; }
+.count { color: var(--muted); font-size: 11px; font-family: var(--mono); }
+.sorts { display: flex; }
 .sorts button {
-  border: 1px solid transparent; background: transparent; color: var(--muted);
-  border-radius: 999px; padding: 4px 12px; font-size: 12px;
+  border: var(--rule); border-right-width: 0;
+  background: var(--paper); color: var(--muted);
+  padding: 5px 13px; font-size: 10.5px;
 }
-.sorts button:hover:not(:disabled) { background: var(--surface-2); }
-.sorts button.on {
-  background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600;
-}
-.sorts button:disabled { opacity: 0.4; cursor: default; }
+.sorts button:last-child { border-right-width: 2px; }
+.sorts button:hover:not(:disabled):not(.on) { color: var(--text); border-color: var(--line-strong); }
+.sorts button.on { background: var(--invert-bg); border-color: var(--invert-bg); color: var(--invert-text); }
+.sorts button:disabled { opacity: 0.5; cursor: default; }
 
 /* ---- a result ---------------------------------------------------------- */
 
 .row {
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-left: 3px solid transparent;
-  border-radius: 12px;
-  padding: 13px 15px; margin-bottom: 10px;
+  background: var(--paper);
+  border: var(--rule);
+  border-left: 6px solid transparent;
+  padding: 14px 16px; margin-bottom: 14px;
   cursor: pointer;
-  transition: border-color 120ms, box-shadow 120ms, transform 120ms;
 }
-.row:hover { border-left-color: var(--navy-400); box-shadow: var(--shadow-sm); }
-.row.active {
-  border-left-color: var(--orange);
-  border-color: var(--navy-400);
-  box-shadow: 0 0 0 3px rgba(42, 79, 150, 0.12);
-}
+/* Hover firms the rule, selection colours it. One property carries both, so there is no
+   second visual language to learn — and nothing moves. */
+.row:hover { border-color: var(--line-strong); }
+.row.active { border-color: var(--line-strong); border-left-color: var(--orange); }
 
-.row-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.row-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 
 .code {
-  font-family: "SF Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
-  font-size: 11.5px; color: var(--accent); font-weight: 700; flex: none;
+  font-family: var(--mono);
+  font-size: 11.5px; color: var(--muted); font-weight: 700; flex: none;
 }
 
 .title {
-  margin: 0; font-size: 14.5px; font-weight: 600; color: var(--accent);
+  margin: 0; font-size: 14.5px; font-weight: 700; color: var(--text);
   flex: 1; min-width: 0;
 }
-.row:hover .title { text-decoration: underline; text-underline-offset: 2px; }
+.row:hover .title { text-decoration: underline; text-underline-offset: 3px; }
 
 .badge {
-  font-size: 9.5px; font-weight: 700; letter-spacing: 0.03em;
-  padding: 2px 7px; border-radius: 999px; flex: none; text-transform: uppercase;
+  font-size: 9px; padding: 3px 7px; flex: none;
+  border: 2px solid var(--line);
 }
-.badge.exact { background: var(--orange); color: #fff; }
-.badge.lang, .badge.ext { background: var(--surface-2); color: var(--muted); }
+.badge.exact { background: var(--orange); border-color: var(--orange); color: #2a1600; }
+.badge.lang, .badge.ext { background: var(--paper); color: var(--muted); font-family: var(--mono); }
 
 .save {
   border: 0; background: transparent; color: var(--muted);
-  font-size: 16px; padding: 2px 5px; border-radius: 50%; flex: none;
+  font-size: 16px; padding: 2px 6px; flex: none;
 }
 .save.on { color: var(--orange); }
-.save:hover { background: var(--surface-2); }
+.save:hover { background: var(--paper-2); color: var(--text); }
 
 /* Where it matched. The left rule is the "quoted from the document" cue. */
-.evidence { margin-top: 9px; display: flex; flex-direction: column; gap: 6px; }
+.evidence { margin-top: 11px; display: flex; flex-direction: column; gap: 8px; }
 .passage-line {
-  margin: 0; padding: 6px 0 6px 11px;
+  margin: 0; padding: 4px 0 4px 12px;
   border-left: 2px solid var(--line);
   color: var(--muted); font-size: 12.5px; line-height: 1.5;
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
 }
 .snippet {
-  margin: 8px 0 0; color: var(--muted); font-size: 12.5px;
+  margin: 10px 0 0; color: var(--muted); font-size: 12.5px;
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
 }
-.thin { margin: 7px 0 0; font-size: 11.5px; color: var(--muted); font-style: italic; }
+.thin {
+  margin: 9px 0 0; font-size: 10.5px; color: var(--crimson-text);
+  text-transform: uppercase; letter-spacing: 0.06em; font-weight: 700;
+}
 
 mark {
   background: var(--mark-bg); color: var(--mark-text);
-  border-radius: 3px; padding: 0 2px; font-weight: 600;
+  padding: 0 3px; font-weight: 700;
 }
 
 /* ---- empty states ------------------------------------------------------ */
 
-.empty, .detail-empty { text-align: center; color: var(--muted); padding: 44px 24px; }
-.empty p { margin: 0 0 8px; }
-.detail-empty p { margin: 10px 0 0; }
-.hint { font-size: 12.5px; opacity: 0.9; }
+.empty, .detail-empty { text-align: center; color: var(--muted); padding: 48px 24px; }
+.empty p { margin: 0 0 10px; }
+.detail-empty p { margin: 14px 0 0; text-transform: uppercase; letter-spacing: 0.07em; font-size: 11px; }
+.hint { font-size: 12.5px; }
 
 /* ---- the detail card --------------------------------------------------- */
 
 .detail-card, .saved {
-  background: var(--surface); border: 1px solid var(--line);
-  border-radius: 12px; padding: 15px;
+  background: var(--paper); border: var(--rule); padding: 16px;
 }
-.detail-card { border-top: 3px solid var(--orange); }
+.detail-card { border-top: 6px solid var(--orange); }
 
 .detail-code {
-  font-family: ui-monospace, monospace; font-size: 11.5px;
-  color: var(--accent); font-weight: 700;
+  font-family: var(--mono); font-size: 11.5px;
+  color: var(--muted); font-weight: 700;
 }
-.detail-code .rev { color: var(--muted); font-weight: 500; }
-.detail-card h2 { margin: 5px 0 13px; font-size: 16.5px; line-height: 1.35; }
+.detail-code .rev { font-weight: 400; }
+.detail-card h2 {
+  margin: 8px 0 16px; font-size: 17px; line-height: 1.3;
+  font-weight: 800; letter-spacing: -0.01em;
+}
 
 .detail-card dl {
-  display: grid; grid-template-columns: 62px 1fr; gap: 5px 10px;
-  margin: 0 0 14px; font-size: 12.5px;
+  display: grid; grid-template-columns: 58px 1fr; gap: 7px 12px;
+  margin: 0 0 16px; font-size: 12.5px;
+  border-top: var(--rule); padding-top: 12px;
 }
-.detail-card dt { color: var(--muted); }
+.detail-card dt {
+  color: var(--muted); text-transform: uppercase;
+  letter-spacing: 0.06em; font-size: 10px; font-weight: 700; padding-top: 1px;
+}
 .detail-card dd { margin: 0; overflow-wrap: anywhere; }
 
-.detail-actions { display: flex; flex-direction: column; gap: 8px; }
+.detail-actions { display: flex; flex-direction: column; gap: 10px; }
 .detail-actions a, .detail-actions button {
   text-align: center; text-decoration: none;
-  border: 1px solid var(--line); background: var(--surface-2); color: var(--text);
-  border-radius: 9px; padding: 9px 10px; font-size: 13px;
+  border: var(--rule-strong); background: var(--paper); color: var(--text);
+  padding: 10px; font-size: 11px;
 }
+.detail-actions a:hover, .detail-actions button:hover { border-color: var(--accent); color: var(--accent); }
 .detail-actions .primary {
-  background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600;
+  background: var(--invert-bg); border-color: var(--invert-bg); color: var(--invert-text);
 }
-.detail-actions .primary:hover { background: var(--navy-600); }
-.detail-actions .secondary { color: var(--muted); font-size: 12.5px; }
-.detail-actions .secondary:hover { color: var(--text); border-color: var(--navy-400); }
+.detail-actions .primary:hover { color: var(--invert-text); opacity: 0.88; }
+.detail-actions .secondary { color: var(--muted); border-color: var(--line); }
 
 .viewer-note {
-  margin: 8px 0 0; font-size: 11px; line-height: 1.45; color: var(--muted);
+  margin: 10px 0 0; font-size: 11px; line-height: 1.45; color: var(--muted);
 }
 
-.detail-passages { margin-top: 15px; }
-.detail-passages h4 {
-  margin: 0 0 8px; font-size: 11px; text-transform: uppercase;
-  letter-spacing: 0.06em; color: var(--muted);
-}
+.detail-passages { margin-top: 18px; border-top: var(--rule); padding-top: 12px; }
+.detail-passages h4 { margin: 0 0 10px; font-size: 10px; color: var(--muted); }
 .passage {
-  margin: 0 0 8px; background: var(--surface-2);
-  border-left: 2px solid var(--navy-400); border-radius: 0 8px 8px 0;
-  padding: 9px 11px; font-size: 12px; line-height: 1.55;
+  margin: 0 0 10px; background: var(--paper-2);
+  border-left: 2px solid var(--line);
+  padding: 10px 12px; font-size: 12px; line-height: 1.55;
   white-space: pre-wrap; word-break: break-word;
   max-height: 190px; overflow: auto; color: var(--muted);
   font-family: inherit;
@@ -336,33 +377,40 @@ mark {
 
 /* ---- the saved list ---------------------------------------------------- */
 
-.saved h3 { margin: 0 0 10px; font-size: 13px; display: flex; align-items: center; gap: 7px; }
+.saved h3 {
+  margin: 0 0 12px; font-size: 11px; display: flex; align-items: center; gap: 8px;
+  text-transform: uppercase; letter-spacing: 0.08em;
+  border-bottom: var(--rule); padding-bottom: 10px;
+}
 .saved h3 span {
-  background: var(--orange); color: #fff;
-  border-radius: 999px; padding: 1px 7px; font-size: 11px;
+  background: var(--orange); color: #2a1600;
+  padding: 0 6px; font-size: 10px; font-family: var(--mono);
 }
 .saved-row { display: flex; align-items: center; gap: 6px; }
 .saved-open {
   flex: 1; text-align: left; border: 0; background: transparent; color: var(--text);
-  padding: 6px; border-radius: 7px; font-size: 12.5px;
+  padding: 7px 6px; font-size: 12.5px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.saved-open:hover { background: var(--surface-2); }
+.saved-open .code { margin-right: 6px; }
+.saved-open:hover { background: var(--paper-2); }
 .saved-rm {
   border: 0; background: transparent; color: var(--muted);
-  font-size: 17px; padding: 2px 7px; border-radius: 50%;
+  font-size: 17px; padding: 2px 8px;
 }
-.saved-rm:hover { background: var(--surface-2); color: #d64545; }
+.saved-rm:hover { color: var(--crimson-text); }
+
+/* ---- focus ------------------------------------------------------------- */
+
+/* One visible ring, square like everything else, and never removed. */
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 /* ---- scrollbars, so the panes do not look like a web page ------------- */
 
 .results::-webkit-scrollbar, .detail::-webkit-scrollbar,
-.passage::-webkit-scrollbar { width: 10px; }
+.passage::-webkit-scrollbar { width: 12px; }
 .results::-webkit-scrollbar-thumb, .detail::-webkit-scrollbar-thumb,
 .passage::-webkit-scrollbar-thumb {
-  background: var(--line); border-radius: 999px;
-  border: 3px solid transparent; background-clip: content-box;
-}
-.results::-webkit-scrollbar-thumb:hover, .detail::-webkit-scrollbar-thumb:hover {
-  background: var(--navy-400); background-clip: content-box;
+  background: var(--line);
+  border: 4px solid transparent; background-clip: content-box;
 }

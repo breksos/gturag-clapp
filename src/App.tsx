@@ -5,6 +5,7 @@
 // actions, and a button that prompts on their behalf inverts that (PLAYBOOK, field notes).
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { Emblem } from "./Emblem";
 import {
   useApp, useAsset, prefetchAssets, agentTint, isMatch, fold,
   openUrl, viewUrl, usesViewer,
@@ -51,7 +52,7 @@ export default function App() {
     <div className={`app ${resting ? "resting" : ""}`}>
       <header className="header">
         <div className="brand">
-          <Butterfly />
+          <Emblem />
           <div className="brandtext">
             <span className="wordmark">GTÜ Formlar</span>
             {state.corpus && (
@@ -72,7 +73,7 @@ export default function App() {
       <div className="stage">
         {resting && (
           <div className="hero">
-            <Butterfly big />
+            <Emblem size={84} />
             <h1>Üniversitenin bütün formları, tek aramada</h1>
             <p>
               Formun adını bilmenize gerek yok — ne yapmak istediğinizi yazın.
@@ -258,7 +259,7 @@ function Detail({
   if (!doc) {
     return (
       <div className="detail-empty">
-        <Butterfly muted />
+        <Emblem size={40} muted />
         <p>Bir form seçin.</p>
       </div>
     );
@@ -423,36 +424,6 @@ function Saved({
         </div>
       ))}
     </div>
-  );
-}
-
-/**
- * The mark. GTÜ's own emblem is a butterfly, so the app wears one — drawn here rather than
- * copied, because the university's crest is the university's, and this is an independent
- * tool. Two wings in the school's navy and orange, symmetric about a slim body.
- */
-function Butterfly({ big, muted }: { big?: boolean; muted?: boolean }) {
-  const size = big ? 72 : 26;
-  return (
-    <svg
-      className={`butterfly ${muted ? "muted" : ""}`}
-      width={size}
-      height={size}
-      viewBox="0 0 48 48"
-      aria-hidden
-    >
-      <g className="wing-left">
-        <path d="M23 24C17 10 9 6 5 10c-4 4-2 14 4 18-5 1-7 5-5 8 3 4 12 2 19-8z" />
-      </g>
-      <g className="wing-right">
-        <path d="M25 24C31 10 39 6 43 10c4 4 2 14-4 18 5 1 7 5 5 8-3 4-12 2-19-8z" />
-      </g>
-      <g className="body">
-        <path d="M24 13c1.2 0 2 1 2 2.4v17.2c0 1.4-.8 2.4-2 2.4s-2-1-2-2.4V15.4C22 14 22.8 13 24 13z" />
-        <path d="M24 13c0-2-1.6-4-3.6-5" fill="none" strokeWidth="1.6" strokeLinecap="round" />
-        <path d="M24 13c0-2 1.6-4 3.6-5" fill="none" strokeWidth="1.6" strokeLinecap="round" />
-      </g>
-    </svg>
   );
 }
 
