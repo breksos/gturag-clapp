@@ -331,12 +331,23 @@ pub struct Index {
 
 impl Index {
     pub fn build(corpus: &Corpus) -> Index {
+        // The code goes in with the title so `FR-0083` is findable as a WORD even when
+        // `find_code` declines to treat the query as naming a form. That happens whenever a
+        // bare number is only part of a longer question — `find_code` reads a lone number
+        // as a code but refuses "0083 formu nerede", because "2 nüsha halinde" must not be
+        // read as FR-0002. Without the code in this field that query reached the form by no
+        // route at all; with it, the number is simply a term the title covers.
+        let titles: Vec<String> = corpus
+            .docs()
+            .iter()
+            .map(|d| match &d.code {
+                Some(code) => format!("{code} {}", d.title),
+                None => d.title.clone(),
+            })
+            .collect();
         Index {
             body: Field::build(corpus.chunks().iter().map(|c| c.text.as_str())),
-            // The code goes in with the title so `FR-0083` is findable as a word even when
-            // it is embedded in a longer question that `find_code` declines to treat as a
-            // bare code.
-            title: Field::build(corpus.docs().iter().map(|d| d.title.as_str())),
+            title: Field::build(titles.iter().map(String::as_str)),
         }
     }
 
@@ -810,6 +821,42 @@ mod tests {
         // ...but a code WITH a real question still searches for the rest.
         let hits = idx.search(&c, "FR-0083 staj belgesi", None, Sort::Relevance, 25);
         assert!(hits.len() > 1, "a code plus real words must still search");
+    }
+
+    /// A bare number inside a longer question is the one way of naming a form that
+    /// `find_code` deliberately refuses to read as a code — it cannot, or "2 nüsha halinde"
+    /// would resolve to FR-0002. The number must therefore reach the form as an ordinary
+    /// TERM, which it only can if the code is part of the title field.
+    ///
+    /// On the real corpus this was the difference between FR-0083 ranking first for
+    /// "0083 formu nerede" and not appearing in the results at all.
+    #[test]
+    fn a_bare_number_inside_a_question_still_reaches_its_form() {
+        let c = corpus();
+        let idx = Index::build(&c);
+        // Not a code as far as `find_code` is concerned...
+        assert_eq!(find_code("0083 formu nerede"), None);
+        // ...so this hit can only have come from the title field carrying the code.
+        let hits = idx.search(&c, "0083 formu nerede", None, Sort::Relevance, 5);
+        assert_eq!(
+            c.docs()[hits[0].doc].code.as_deref(),
+            Some("FR-0083"),
+            "got {:?}",
+            hits.iter().map(|h| &c.docs()[h.doc].title).collect::<Vec<_>>()
+        );
+    }
+
+    /// ...and the reason that is safe: a small number that is nobody's form code must not
+    /// start matching forms merely because codes are now indexed.
+    #[test]
+    fn indexing_the_code_does_not_make_stray_numbers_match() {
+        let c = corpus();
+        let idx = Index::build(&c);
+        let hits = idx.search(&c, "2 nüsha halinde doldurulacak", None, Sort::Relevance, 5);
+        assert!(
+            hits.iter().all(|h| c.docs()[h.doc].code.as_deref() != Some("FR-0002")),
+            "a bare `2` must not resolve to a form code"
+        );
     }
 
     #[test]
