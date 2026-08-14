@@ -17,7 +17,11 @@ echo "── 1. tests ───────────────────�
 
 echo
 echo "── 2. package ───────────────────────────────────────"
-scripts/package.sh
+# Through `bash`, not as a bare path. The scripts carry the executable bit in the index
+# now, but a source zip from a GitHub release drops it, and so does a clone with
+# core.fileMode=false — and the symptom is `Permission denied` on step 2, on every
+# platform except the Windows one this repo is authored on. Same idiom release.yml uses.
+bash scripts/package.sh
 
 echo
 echo "── 3. the depot's own manifest ──────────────────────"
