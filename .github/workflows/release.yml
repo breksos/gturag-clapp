@@ -43,15 +43,6 @@ jobs:
         with:
           submodules: recursive   # clappkit is the foundation, not an optional extra
 
-      - name: Assert an MSVC host on Windows
-        if: runner.os == 'Windows'
-        shell: bash
-        # WebView2: the MSVC toolchain links the LOADER statically, so the depot ships zero
-        # DLLs. A -gnu host would need WebView2Loader.dll beside the exe, and the failure
-        # is silent (PLAYBOOK §9).
-        run: |
-          rustc -vV | grep -q 'host: .*-msvc' || { echo "not an MSVC host"; exit 1; }
-
       - name: Linux build dependencies
         if: runner.os == 'Linux'
         run: |
@@ -59,6 +50,27 @@ jobs:
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
 
       - uses: dtolnay/rust-toolchain@stable
+
+      # AFTER the toolchain is installed, not before: the question is what will BUILD this,
+      # and before this point `rustc` is whatever the runner image happened to ship.
+      - name: Assert an MSVC host on Windows
+        if: runner.os == 'Windows'
+        shell: bash
+        # WebView2: the MSVC toolchain links the LOADER statically, so the depot ships zero
+        # DLLs. A -gnu host would need WebView2Loader.dll beside the exe, and the failure
+        # is silent (PLAYBOOK §9).
+        #
+        # NOT `rustc -vV | grep -q`: `grep -q` exits at its first match and closes the pipe,
+        # rustc then dies writing to it ("failed printing to stdout ... os error 232"), and
+        # GitHub's bash runs with `set -o pipefail` — so the pipeline failed precisely WHEN
+        # the host matched, and this assert rejected every MSVC runner it was written to
+        # accept. `$(...)` reads rustc to the end, so there is no pipe to close early.
+        run: |
+          host=$(rustc -vV | sed -n 's/^host: //p')
+          case "$host" in
+            *-msvc) echo "host = $host" ;;
+            *) echo "not an MSVC host: $host"; exit 1 ;;
+          esac
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
@@ -81,6 +93,54 @@ jobs:
           Add-MpPreference -ExclusionPath "${{ github.workspace }}","$HOME\.cargo","$HOME\.rustup" -ErrorAction SilentlyContinue
 
       - run: npm ci
+
+      - name: Install the Clatch CLI
+        shell: bash
+        # `scripts/package.sh` calls `clatch validate` and `clatch pack`, and nothing else
+        # in this job puts either on PATH — so the Package step below died with
+        # "clatch: command not found" the moment a build ever got that far.
+        #
+        # Pinned to the SAME tag clappkit pins the clatch CRATES to. The CLI writes the
+        # depot and the library reads it; letting those two drift apart is how a depot
+        # packs cleanly on a runner and refuses to install on a human's machine.
+        env:
+          CLATCH_VERSION: v0.4.3
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          case "${{ runner.os }}" in
+            Windows) asset="clatch-$CLATCH_VERSION-x86_64-pc-windows-msvc.zip" ;;
+            macOS)   asset="clatch-$CLATCH_VERSION-aarch64-apple-darwin.tar.gz" ;;
+            *)       asset="clatch-$CLATCH_VERSION-x86_64-unknown-linux-gnu.tar.gz" ;;
+          esac
+          mkdir -p "$HOME/clatch-cli"
+          cd "$HOME/clatch-cli"
+          gh release download "$CLATCH_VERSION" --repo arfium/clatch \
+             --pattern "$asset" --pattern "$asset.sha256"
+          # The publisher ships a hash beside every archive, so check it: that is the
+          # difference between "downloaded something" and "downloaded the release". Only
+          # the hash FIELD is compared, deliberately — the checksum file records the path
+          # the archive had on the PUBLISHER's machine (`dist/clatch-…tar.gz`), so
+          # `sha256sum -c` would go looking for a `dist/` directory that does not exist
+          # here and fail on a download that is perfectly good.
+          want=$(awk '{print $1}' "$asset.sha256")
+          got=$(sha256sum "$asset" 2>/dev/null | awk '{print $1}' \
+                || shasum -a 256 "$asset" | awk '{print $1}')
+          [ -n "$want" ] && [ "$want" = "$got" ] || {
+            echo "clatch checksum mismatch: expected $want, got $got" >&2; exit 1; }
+          case "$asset" in
+            *.zip) unzip -q "$asset" ;;
+            *)     tar -xzf "$asset" ;;
+          esac
+          # The archive unpacks into a directory NAMED after itself — `clatch` sits inside
+          # it, next to an install.sh. Found by search rather than by reconstructing that
+          # name, so a change in the publisher's archive layout surfaces as a clear "not
+          # found" here instead of a "command not found" three steps later.
+          bin=$(find . -name 'clatch' -o -name 'clatch.exe' | head -n 1)
+          [ -n "$bin" ] || { echo "no clatch binary inside $asset" >&2; exit 1; }
+          chmod +x "$bin" || true
+          cd "$(dirname "$bin")"
+          echo "$PWD" >> "$GITHUB_PATH"
+          ./clatch --version
 
       - name: Package
         shell: bash
