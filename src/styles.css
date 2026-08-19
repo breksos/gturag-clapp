@@ -378,11 +378,6 @@ mark {
   margin: 0 0 10px; font-size: 13px;
   display: flex; align-items: center; justify-content: space-between; gap: 8px;
 }
-.sync {
-  border: 1px solid var(--line); background: var(--surface-2); color: var(--muted);
-  border-radius: 999px; padding: 3px 10px; font-size: 11px; font-weight: 500;
-}
-.sync:hover { color: var(--accent); border-color: var(--navy-400); }
 
 .feed-empty, .feed-built { margin: 0; color: var(--muted); font-size: 11.5px; }
 .feed-built { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--line); }
@@ -401,3 +396,24 @@ mark {
 .feed-detail {
   color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
+
+/* ---- the sync control, in the header so it exists in every state -------- */
+
+.header-right { display: flex; align-items: center; gap: 14px; }
+
+.syncbtn {
+  display: inline-flex; align-items: center; gap: 6px;
+  border: 1px solid var(--line); background: var(--surface-2); color: var(--muted);
+  border-radius: 999px; padding: 5px 13px; font-size: 12px; font-weight: 500;
+  white-space: nowrap;
+}
+.syncbtn:hover:not(:disabled) { color: var(--accent); border-color: var(--navy-400); }
+.syncbtn:disabled { cursor: default; opacity: 0.85; }
+.syncbtn.failed { border-color: #d64545; color: #d64545; }
+
+.syncicon { font-size: 13px; line-height: 1; display: inline-block; }
+/* Spinning only while it is actually working — the point is to distinguish "pressed and
+   working" from "pressed and nothing happened". */
+.syncbtn.busy .syncicon { animation: spin 1.1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .syncbtn.busy .syncicon { animation: none; } }

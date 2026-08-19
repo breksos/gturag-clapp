@@ -62,10 +62,13 @@ export default function App() {
             )}
           </div>
         </div>
-        <div className="agents">
-          {state.agents.map((a) => (
-            <AgentChip key={a.id} agent={a} />
-          ))}
+        <div className="header-right">
+          <SyncButton state={state} onSync={() => run({ cmd: "sync" })} />
+          <div className="agents">
+            {state.agents.map((a) => (
+              <AgentChip key={a.id} agent={a} />
+            ))}
+          </div>
         </div>
       </header>
 
@@ -136,7 +139,7 @@ export default function App() {
                 onOpen={(id) => run({ cmd: "open", id })}
                 onRemove={(id) => run({ cmd: "unsave", id })}
               />
-              <Feed state={state} onSync={() => run({ cmd: "sync" })} />
+              <Feed state={state} />
             </aside>
           </div>
         )}
@@ -327,6 +330,39 @@ function Detail({
   );
 }
 
+/**
+ * Update the form index, from the window.
+ *
+ * Lives in the HEADER because the header is the one thing on screen in every state. The
+ * first version of this sat in the activity feed, which only renders once there are
+ * results — so the one moment a user most wants it, opening the app to a blank search bar,
+ * was the one moment it did not exist. A control for "before you start" cannot live behind
+ * "after you have started".
+ *
+ * It reports on itself rather than firing silently: a button that looks identical before
+ * and after being pressed reads as broken, and this one can take a while.
+ */
+function SyncButton({ state, onSync }: { state: Snapshot; onSync: () => void }) {
+  const busy = state.provision.index.stage === "downloading";
+  const failed = state.provision.index.stage === "failed";
+  const percent = percentOf(state.provision.index);
+  return (
+    <button
+      className={`syncbtn ${busy ? "busy" : ""} ${failed ? "failed" : ""}`}
+      onClick={onSync}
+      disabled={busy}
+      title={
+        state.corpus
+          ? `Form dizinini güncelle — şu anki sürüm ${state.corpus.built}`
+          : "Form dizinini indir"
+      }
+    >
+      <span className="syncicon">⟳</span>
+      {busy ? `Güncelleniyor… ${percent ?? 0}%` : "Dizini güncelle"}
+    </button>
+  );
+}
+
 function AgentChip({ agent }: { agent: Agent }) {
   const src = useAsset(agent.avatar);
   const initial = fold(agent.name || "?").trim().charAt(0).toLocaleUpperCase("tr");
@@ -436,18 +472,11 @@ function Saved({
  * names its actor, and an agent's rows are tinted with the same colour as its avatar so
  * the two read as one identity.
  */
-function Feed({ state, onSync }: { state: Snapshot; onSync: () => void }) {
+function Feed({ state }: { state: Snapshot }) {
   const rows = [...state.activity].reverse().slice(0, 10);
   return (
     <div className="feed">
-      <h3>
-        Etkinlik
-        {/* The only way to update the corpus from the window. Without it a user who never
-            opens a terminal has no route to `gturag sync` at all. */}
-        <button className="sync" onClick={onSync} title="Form dizinini güncelle">
-          ⟳ Dizini güncelle
-        </button>
-      </h3>
+      <h3>Etkinlik</h3>
       {rows.length === 0 ? (
         <p className="feed-empty">Henüz bir şey yapılmadı.</p>
       ) : (
