@@ -366,3 +366,38 @@ mark {
 .results::-webkit-scrollbar-thumb:hover, .detail::-webkit-scrollbar-thumb:hover {
   background: var(--navy-400); background-clip: content-box;
 }
+
+/* ---- the shared activity feed ------------------------------------------ */
+/* The window's half of "one app, two surfaces": what the agent did, named. */
+
+.feed {
+  background: var(--surface); border: 1px solid var(--line);
+  border-radius: 12px; padding: 15px;
+}
+.feed h3 {
+  margin: 0 0 10px; font-size: 13px;
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+}
+.sync {
+  border: 1px solid var(--line); background: var(--surface-2); color: var(--muted);
+  border-radius: 999px; padding: 3px 10px; font-size: 11px; font-weight: 500;
+}
+.sync:hover { color: var(--accent); border-color: var(--navy-400); }
+
+.feed-empty, .feed-built { margin: 0; color: var(--muted); font-size: 11.5px; }
+.feed-built { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--line); }
+
+.feed-row {
+  display: flex; align-items: baseline; gap: 6px;
+  padding: 5px 0 5px 9px; font-size: 12px;
+  border-left: 2px solid var(--line);
+}
+/* An agent's row is marked in the accent: the point of the feed is that you can tell at a
+   glance which of these you did and which happened without you. */
+.feed-row.theirs { border-left-color: var(--orange); }
+.feed-who { font-weight: 700; flex: none; }
+.feed-row.mine .feed-who { color: var(--muted); }
+.feed-verb { color: var(--muted); flex: none; }
+.feed-detail {
+  color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}

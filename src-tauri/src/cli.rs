@@ -42,7 +42,10 @@ COLLECTING
 
 THE APP
   status                   What both surfaces are looking at: query, results, open form,
-                           saved list, corpus size and date, provisioning state, agents.
+                           saved list, corpus size and date, provisioning state, agents —
+                           and RECENT ACTIVITY: what the human just searched for, opened
+                           or saved, and what other agents did. Read it before assuming
+                           you know what is on their screen.
   sync                     Check for a newer corpus index and download it. Also the retry
                            for a provisioning step that failed.
   focus                    Bring the window forward.
@@ -75,6 +78,10 @@ async fn call(mut req: Value) -> Value {
         }
     }
 }
+
+/// How much of the shared log `status` prints. The whole point is "what just happened",
+/// and a terminal that scrolls forty lines every time buries the state above it.
+const ACTIVITY_SHOWN: usize = 8;
 
 fn die(msg: &str) -> ! {
     eprintln!("{CLI}: {msg}");
@@ -275,6 +282,30 @@ pub async fn run(args: Vec<String>) -> ! {
             } else {
                 agents.iter().map(|a| field(a, "name")).collect::<Vec<_>>().join(", ")
             });
+
+            // What the HUMAN has been doing, and what other agents have. This is the half
+            // of the loop that makes the window and the terminal one app: without it, an
+            // agent can read the shared state but has no idea which of it the person in
+            // front of the screen just did.
+            let log = reply["activity"].as_array().unwrap_or(&empty);
+            if !log.is_empty() {
+                println!("
+recent");
+                for a in log.iter().rev().take(ACTIVITY_SHOWN).collect::<Vec<_>>().iter().rev() {
+                    let who = match a.get("who").and_then(Value::as_str) {
+                        // Resolve the id to a display name against the roster: the log
+                        // stores ids because a name is re-pointable, but a terminal wants
+                        // the name.
+                        Some(id) => agents
+                            .iter()
+                            .find(|ag| field(ag, "id") == id)
+                            .map(|ag| field(ag, "name").to_string())
+                            .unwrap_or_else(|| id.to_string()),
+                        None => "you".to_string(),
+                    };
+                    println!("  {:<10} {:<7} {}", who, field(a, "action"), field(a, "detail"));
+                }
+            }
         }
 
         "sync" => {

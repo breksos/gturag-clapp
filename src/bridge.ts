@@ -67,6 +67,14 @@ export type Stage =
   | { stage: "ready" }
   | { stage: "failed"; reason: string };
 
+/** One thing that happened, and who did it. `who` is an agent id, or null for the human. */
+export type Activity = {
+  seq: number;
+  who: string | null;
+  action: "search" | "open" | "save" | "unsave" | "sort" | "sync";
+  detail: string;
+};
+
 export type Agent = {
   id: string;
   name: string;
@@ -94,6 +102,8 @@ export type Snapshot = Snapshotish & {
   };
   corpus: { documents: number; chunks: number; built: string; source: string } | null;
   agents: Agent[];
+  /** What both surfaces have been doing, oldest first. */
+  activity: Activity[];
 };
 
 /** Every command the window can send. The core answers the same set over the CLI channel. */
@@ -105,6 +115,13 @@ export type Cmd =
   | { cmd: "unsave"; id: string }
   | { cmd: "sort"; by: string }
   | { cmd: "sync" };
+
+/** An agent id resolved to its current display name. Ids are the key and names are for
+ *  humans, so a rename relabels history in place rather than orphaning it. */
+export function nameOf(agents: Agent[], id: string | null): string {
+  if (id === null) return "Siz";
+  return agents.find((a) => a.id === id)?.name ?? id;
+}
 
 /** The stem length index.rs truncates to. A term at least this long may match a word by
  *  prefix; anything shorter must match the whole word, or `ad` would light up `adres`. */
@@ -136,6 +153,7 @@ export const EMPTY: Snapshot = {
   provision: { model: { stage: "missing" }, index: { stage: "missing" }, ready: false, summary: "starting…" },
   corpus: null,
   agents: [],
+  activity: [],
 };
 
 /**
@@ -150,6 +168,7 @@ function normalize(raw: Snapshot): Snapshot {
     results: (raw.results ?? []).map((d) => ({ ...d, passages: d.passages ?? [] })),
     saved: (raw.saved ?? []).map((d) => ({ ...d, passages: d.passages ?? [] })),
     agents: raw.agents ?? [],
+    activity: raw.activity ?? [],
     terms: raw.terms ?? [],
     provision: raw.provision ?? EMPTY.provision,
   };

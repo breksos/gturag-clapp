@@ -6,9 +6,9 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  useApp, useAsset, prefetchAssets, agentTint, isMatch, fold,
+  useApp, useAsset, prefetchAssets, agentTint, isMatch, fold, nameOf,
   openUrl, viewUrl, usesViewer,
-  percentOf, type Doc, type Agent, type Snapshot,
+  percentOf, type Doc, type Agent, type Activity, type Snapshot,
 } from "./bridge";
 
 /** Debounced so a fast typist does not run a search per keystroke. */
@@ -136,6 +136,7 @@ export default function App() {
                 onOpen={(id) => run({ cmd: "open", id })}
                 onRemove={(id) => run({ cmd: "unsave", id })}
               />
+              <Feed state={state} onSync={() => run({ cmd: "sync" })} />
             </aside>
           </div>
         )}
@@ -422,6 +423,65 @@ function Saved({
           <button className="saved-rm" title="Çıkar" onClick={() => onRemove(d.id)}>×</button>
         </div>
       ))}
+    </div>
+  );
+}
+
+/**
+ * What both surfaces have been doing, and who did it.
+ *
+ * This is the half of a clapp that a window usually forgets. The agent and the human act
+ * on one state, so an agent's search already fills this screen — but without saying whose
+ * it was, the human watches their own search box change for no visible reason. Every row
+ * names its actor, and an agent's rows are tinted with the same colour as its avatar so
+ * the two read as one identity.
+ */
+function Feed({ state, onSync }: { state: Snapshot; onSync: () => void }) {
+  const rows = [...state.activity].reverse().slice(0, 10);
+  return (
+    <div className="feed">
+      <h3>
+        Etkinlik
+        {/* The only way to update the corpus from the window. Without it a user who never
+            opens a terminal has no route to `gturag sync` at all. */}
+        <button className="sync" onClick={onSync} title="Form dizinini güncelle">
+          ⟳ Dizini güncelle
+        </button>
+      </h3>
+      {rows.length === 0 ? (
+        <p className="feed-empty">Henüz bir şey yapılmadı.</p>
+      ) : (
+        rows.map((a) => <FeedRow key={a.seq} item={a} agents={state.agents} />)
+      )}
+      {state.corpus && (
+        <p className="feed-built">Dizin sürümü: {state.corpus.built}</p>
+      )}
+    </div>
+  );
+}
+
+const VERBS: Record<Activity["action"], string> = {
+  search: "aradı",
+  open: "açtı",
+  save: "listeye ekledi",
+  unsave: "listeden çıkardı",
+  sort: "sıraladı",
+  sync: "dizini güncelledi",
+};
+
+function FeedRow({ item, agents }: { item: Activity; agents: Agent[] }) {
+  const mine = item.who === null;
+  return (
+    <div className={`feed-row ${mine ? "mine" : "theirs"}`}>
+      <span
+        className="feed-who"
+        // Keyed on the agent id, matching the avatar strip, so one agent is one colour.
+        style={mine ? undefined : { color: agentTint(item.who!) }}
+      >
+        {nameOf(agents, item.who)}
+      </span>
+      <span className="feed-verb">{VERBS[item.action] ?? item.action}</span>
+      <span className="feed-detail">{item.detail}</span>
     </div>
   );
 }

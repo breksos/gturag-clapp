@@ -145,6 +145,7 @@ impl Core {
                         // Force: `sync` is both "is there a newer index?" and the retry
                         // for a step that failed, so it re-runs rather than short-circuits.
                         spawn_provisioning(self_arc(), handle.clone(), true);
+                        state.note_action(&by, "sync", "");
                         json!({ "ok": true })
                     }
                     None => json!({ "ok": false, "error": "the window is not up yet" }),

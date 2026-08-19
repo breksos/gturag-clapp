@@ -16,12 +16,41 @@ use crate::corpus::Corpus;
 use crate::index::{self, Hit, Index, Sort};
 use clappkit::{AgentRow, Emit};
 use serde_json::{json, Value};
+use std::collections::VecDeque;
 
 /// How many results a page holds. This belongs to the SHARED state, not to the caller's
 /// `-n`: the moment an agent asking for 1 result repaginates the human's window to one row,
 /// the bug reads as "why does searching staj return one form?" (PLAYBOOK §11). `-n` limits
 /// what a terminal prints; the page is fixed and both surfaces say "N of TOTAL" about it.
 pub const PAGE: usize = 25;
+
+/// How many actions the shared log remembers. Long enough that a human returning to the
+/// window can see what an agent did while they were away; short enough that the snapshot —
+/// which is sent on every single command — stays small.
+pub const ACTIVITY_MAX: usize = 40;
+
+/// One thing that happened, and who did it.
+///
+/// This is what makes the two surfaces one app rather than two programs sharing a file.
+/// Both of them already act on the same state; without a record of WHO acted, the human
+/// sees their search box change for no visible reason and the agent cannot tell what the
+/// human has been doing. Attribution is the missing half of the loop.
+///
+/// `who` is an agent **id**, or `None` for the human. Ids, never names: a name is
+/// re-pointable and the roster carries the current one, so the window resolves it at render
+/// time and a rename relabels history instead of orphaning it.
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct Activity {
+    /// Monotonic, so the window can order and key these. Deliberately NOT a timestamp:
+    /// this module has no clock, which is what keeps it pure and testable.
+    pub seq: u64,
+    pub who: Option<String>,
+    /// The verb, matching the CLI's own vocabulary: `search`, `open`, `save`, `unsave`,
+    /// `sort`, `sync`.
+    pub action: String,
+    /// What it was done to — the query, the form code.
+    pub detail: String,
+}
 
 /// Who is acting. The app can tell because Clatch injects `CLATCH_AGENT_ID` into the
 /// calling agent's shell, and [`clappkit::app::spawn_ipc`] hands it to the handler.
@@ -34,6 +63,14 @@ pub enum By {
 impl By {
     fn is_human(&self) -> bool {
         matches!(self, By::Human)
+    }
+
+    /// The agent id to record against an action, or `None` for the human.
+    fn actor(&self) -> Option<String> {
+        match self {
+            By::Human => None,
+            By::Agent(id) => Some(id.clone()),
+        }
     }
 }
 
@@ -107,6 +144,10 @@ pub struct AppState {
 
     /// The live roster, refreshed from the control pipe.
     pub agents: Vec<AgentRow>,
+
+    /// What both surfaces have been doing, newest last.
+    activity: VecDeque<Activity>,
+    seq: u64,
 }
 
 impl AppState {
@@ -137,13 +178,41 @@ impl AppState {
         &self.saved
     }
 
+    /// Record who did what. Called by every mutating method, including the ones that emit
+    /// no signal — a signal is a wake-up, this is the record, and the two answer different
+    /// questions.
+    fn note(&mut self, by: &By, action: &str, detail: impl Into<String>) {
+        self.seq += 1;
+        self.activity.push_back(Activity {
+            seq: self.seq,
+            who: by.actor(),
+            action: action.to_string(),
+            detail: detail.into(),
+        });
+        while self.activity.len() > ACTIVITY_MAX {
+            self.activity.pop_front();
+        }
+    }
+
+    /// The shared log, oldest first.
+    pub fn activity(&self) -> &VecDeque<Activity> {
+        &self.activity
+    }
+
+    /// Record an action the state itself does not perform — `sync` runs in the app layer,
+    /// but a human watching the feed should still see who asked for it.
+    pub fn note_action(&mut self, by: &By, action: &str, detail: &str) {
+        self.note(by, action, detail);
+    }
+
     /// Run a search. `query_vec` is the embedded query, or `None` when the model is not
     /// provisioned yet — search degrades to lexical rather than refusing to answer.
     ///
-    /// Searching is not itself news for an agent: it is how either surface looks around,
-    /// and a signal per keystroke-equivalent would be noise. What signals is *opening*
-    /// something, which is a decision.
-    pub fn search(&mut self, query: &str, query_vec: Option<&[f32]>, _by: &By) -> Vec<Emit> {
+    /// Searching does not SIGNAL: a signal wakes an agent, and being woken for every
+    /// keystroke-equivalent is noise. It is still RECORDED, which is a different thing —
+    /// the agent reads the log when it next looks, and the human watches their window fill
+    /// in under an agent's hand. That distinction is the whole point of the activity log.
+    pub fn search(&mut self, query: &str, query_vec: Option<&[f32]>, by: &By) -> Vec<Emit> {
         self.query = query.trim().to_string();
         self.results = match (&self.index, &self.corpus) {
             (Some(idx), Some(c)) if !self.query.is_empty() => {
@@ -155,6 +224,9 @@ impl AppState {
         // and making them click the single row they already identified is ceremony.
         if self.results.len() == 1 && self.results[0].why == index::Why::Code {
             self.open = Some(self.results[0].doc);
+        }
+        if !self.query.is_empty() {
+            self.note(by, "search", self.query.clone());
         }
         Vec::new()
     }
@@ -170,6 +242,8 @@ impl AppState {
             "lang": doc.lang, "url": doc.url,
         });
         self.open = Some(i);
+        let label = format!("{} {}", doc.code.clone().unwrap_or_default(), doc.title);
+        self.note(by, "open", label.trim());
         // Buffered: it rides the user's next prompt, so "how do I fill this in?" already
         // knows which form "this" is. The agent's own `open` is not news to the agent.
         Ok(if by.is_human() {
@@ -193,8 +267,11 @@ impl AppState {
         if self.saved.contains(&doc.id) {
             return Ok(Vec::new());
         }
-        self.saved.push(doc.id.clone());
-        Ok(self.saved_changed(by, "saved", &doc.id.clone()))
+        let id = doc.id.clone();
+        let label = format!("{} {}", doc.code.clone().unwrap_or_default(), doc.title);
+        self.saved.push(id.clone());
+        self.note(by, "save", label.trim());
+        Ok(self.saved_changed(by, "saved", &id))
     }
 
     pub fn unsave(&mut self, needle: &str, by: &By) -> Result<Vec<Emit>, String> {
@@ -207,6 +284,7 @@ impl AppState {
         if self.saved.len() == before {
             return Err(format!("`{id}` is not in the saved list"));
         }
+        self.note(by, "unsave", id.clone());
         Ok(self.saved_changed(by, "removed", &id))
     }
 
@@ -228,7 +306,9 @@ impl AppState {
     pub fn set_sort(&mut self, sort: Sort, query_vec: Option<&[f32]>, by: &By) -> Vec<Emit> {
         self.sort = sort;
         let q = self.query.clone();
-        self.search(&q, query_vec, by)
+        let emits = self.search(&q, query_vec, by);
+        self.note(by, "sort", sort.as_str());
+        emits
     }
 
     fn not_ready(&self) -> String {
@@ -308,6 +388,9 @@ impl AppState {
                 "source": c.header.source,
             })),
             "agents": self.agents,
+            // Who did what, newest last. The window renders it as a live feed and resolves
+            // each `who` against the roster; `gturag status` prints the tail of it.
+            "activity": self.activity,
         })
     }
 }
@@ -423,6 +506,61 @@ mod tests {
         let fresh = state();
         s.attach(fresh.corpus.unwrap());
         assert!(s.open_doc().is_none());
+    }
+
+    /// The half of the loop that was missing: both surfaces act on one state, and now the
+    /// state remembers WHO acted. Without this the human watches their search box change
+    /// for no visible reason, and the agent cannot tell what the human has been doing.
+    #[test]
+    fn the_log_records_who_did_what_on_both_sides() {
+        let mut s = state();
+        s.search("staj", None, &By::Human);
+        s.open("FR-0083", &By::Agent("a1".into())).unwrap();
+        s.save("FR-0083", &By::Human).unwrap();
+
+        let log: Vec<(Option<&str>, &str, &str)> = s
+            .activity()
+            .iter()
+            .map(|a| (a.who.as_deref(), a.action.as_str(), a.detail.as_str()))
+            .collect();
+        assert_eq!(log[0].0, None, "the human is recorded as no agent id");
+        assert_eq!(log[0].1, "search");
+        assert_eq!(log[0].2, "staj");
+        assert_eq!(log[1].0, Some("a1"), "an agent's action carries its id");
+        assert_eq!(log[1].1, "open");
+        assert_eq!(log[2].1, "save");
+        // Monotonic, so the window can order and key them without a clock.
+        let seqs: Vec<u64> = s.activity().iter().map(|a| a.seq).collect();
+        assert!(seqs.windows(2).all(|w| w[1] > w[0]), "{seqs:?}");
+    }
+
+    /// A signal wakes an agent; the log is the record. Searching must do the second
+    /// without the first, or every keystroke-equivalent becomes an interruption.
+    #[test]
+    fn a_search_is_recorded_but_never_signals() {
+        let mut s = state();
+        let emits = s.search("staj", None, &By::Human);
+        assert!(emits.is_empty(), "a search must not wake an agent");
+        assert_eq!(s.activity().len(), 1, "but it must still be visible");
+    }
+
+    #[test]
+    fn the_log_is_bounded_so_the_snapshot_stays_small() {
+        // The snapshot is sent on EVERY command; an unbounded log would grow it forever.
+        let mut s = state();
+        for i in 0..(ACTIVITY_MAX + 25) {
+            s.search(&format!("q{i}"), None, &By::Human);
+        }
+        assert_eq!(s.activity().len(), ACTIVITY_MAX);
+        assert_eq!(s.activity().back().unwrap().detail, format!("q{}", ACTIVITY_MAX + 24));
+    }
+
+    #[test]
+    fn an_empty_search_is_not_worth_recording() {
+        // Clearing the box is not an action anyone needs to see attributed.
+        let mut s = state();
+        s.search("", None, &By::Human);
+        assert!(s.activity().is_empty());
     }
 
     #[test]
