@@ -148,6 +148,26 @@ pub struct AppState {
     /// What both surfaces have been doing, newest last.
     activity: VecDeque<Activity>,
     seq: u64,
+
+    /// Who ran the search currently on screen — an agent id, or `None` for the human.
+    /// Attribution belongs on the VIEW, not only in a log: the log says what happened,
+    /// this says whose the thing in front of you is. The point of a shared screen is
+    /// knowing when it was not you.
+    searched_by: Option<String>,
+    /// A search is in flight. Both surfaces show it, so neither is left wondering whether
+    /// anything is happening.
+    searching: bool,
+}
+
+/// An agent id resolved against the roster. Done HERE rather than in the window so the CLI
+/// prints names too — otherwise `gturag status` shows raw ids while the window shows names,
+/// and they are describing the same event.
+fn name_for(agents: &[AgentRow], id: &str) -> String {
+    agents
+        .iter()
+        .find(|a| a.id == id)
+        .map(|a| a.name.clone())
+        .unwrap_or_else(|| id.to_string())
 }
 
 impl AppState {
@@ -199,6 +219,15 @@ impl AppState {
         &self.activity
     }
 
+    /// Mark a search as started, before the slow part (embedding) runs. The window paints
+    /// "running…" from this, so an agent's search is visible while it happens rather than
+    /// only once it lands.
+    pub fn begin_search(&mut self, query: &str, by: &By) {
+        self.query = query.trim().to_string();
+        self.searched_by = by.actor();
+        self.searching = true;
+    }
+
     /// Record an action the state itself does not perform — `sync` runs in the app layer,
     /// but a human watching the feed should still see who asked for it.
     pub fn note_action(&mut self, by: &By, action: &str, detail: &str) {
@@ -214,6 +243,8 @@ impl AppState {
     /// in under an agent's hand. That distinction is the whole point of the activity log.
     pub fn search(&mut self, query: &str, query_vec: Option<&[f32]>, by: &By) -> Vec<Emit> {
         self.query = query.trim().to_string();
+        self.searched_by = by.actor();
+        self.searching = false;
         self.results = match (&self.index, &self.corpus) {
             (Some(idx), Some(c)) if !self.query.is_empty() => {
                 idx.search(c, &self.query, query_vec, self.sort, PAGE)
@@ -362,9 +393,21 @@ impl AppState {
             None => Vec::new(),
         };
 
+        // One sentence describing what is on screen, built once so both surfaces say the
+        // same thing about the same state.
+        let title = if self.query.is_empty() {
+            String::new()
+        } else {
+            format!("“{}” — {} sonuç", self.query, self.results.len())
+        };
+
         json!({
             "ok": true,
             "query": self.query,
+            "title": title,
+            "searching": self.searching,
+            "searchedBy": self.searched_by,
+            "searchedByName": self.searched_by.as_ref().map(|id| name_for(&self.agents, id)),
             // The terms the INDEX actually matched on, stems included — so the window
             // highlights what was really found rather than doing a naive substring search
             // that would miss `danışman` inside a query for `danışmanımı`.
@@ -388,9 +431,15 @@ impl AppState {
                 "source": c.header.source,
             })),
             "agents": self.agents,
-            // Who did what, newest last. The window renders it as a live feed and resolves
-            // each `who` against the roster; `gturag status` prints the tail of it.
-            "activity": self.activity,
+            // Who did what, newest last. Each row carries the resolved name as well as the
+            // id, so the window and the terminal label it identically.
+            "activity": self.activity.iter().map(|a| json!({
+                "seq": a.seq,
+                "who": a.who,
+                "whoName": a.who.as_ref().map(|id| name_for(&self.agents, id)),
+                "action": a.action,
+                "detail": a.detail,
+            })).collect::<Vec<_>>(),
         })
     }
 }

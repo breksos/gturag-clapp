@@ -88,6 +88,22 @@ impl Core {
             None
         };
 
+        // Announce the search BEFORE embedding it. Embedding is the slow step, and without
+        // this the window learns a search happened only once it has finished — so an
+        // agent's search is invisible while it is the thing actually happening. Pushed on
+        // its own so the human sees "running…" against the right person's name.
+        if cmd == "search" {
+            let snap = {
+                let mut s = self.state.lock().await;
+                s.begin_search(&arg("query"), &by);
+                s.agents = self.control.roster();
+                clappkit::snapshot::with_rev(s.snapshot())
+            };
+            if let Some(h) = APP.get() {
+                kit::push_state(h, snap);
+            }
+        }
+
         // Embedding must happen OUTSIDE the state lock — it is the one slow step here.
         let qvec = match cmd.as_str() {
             "search" => self.embed(&arg("query")).await,

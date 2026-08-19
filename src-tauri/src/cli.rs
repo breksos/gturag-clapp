@@ -326,6 +326,38 @@ recent");
             }
         }
 
+        // A diagnostic verb, absent from clatch.json and the manual. It exists because
+        // `clappkit::ipc::request` maps the OS error to a friendly sentence, and a
+        // friendly sentence is the wrong thing to debug through: "blocked by the sandbox"
+        // is clappkit's GUESS at what `PermissionDenied` meant. This prints what actually
+        // happened, from wherever it is run — which for a sandboxed agent is the only
+        // place the answer exists.
+        "doctor" => {
+            let addr = clappkit::ipc::address(CLI);
+            println!("cli          {CLI}");
+            println!("pipe         {addr}");
+            println!("cwd          {:?}", std::env::current_dir().ok());
+            for k in ["CLATCH_DATA_DIR", "CLATCH_AGENT_ID", "USERNAME", "USERDOMAIN"] {
+                println!("{k:<12} {}", std::env::var(k).unwrap_or_else(|_| "-".into()));
+            }
+            match clappkit::ipc::request(CLI, &json!({ "cmd": "ping" })).await {
+                Ok(v) => println!("
+connect      OK  {v}"),
+                Err(e) => {
+                    println!("
+connect      FAILED");
+                    // The chain, not the summary: the root cause carries the OS code.
+                    for (i, cause) in e.chain().enumerate() {
+                        println!("  [{i}] {cause}");
+                    }
+                    if let Some(io) = e.downcast_ref::<std::io::Error>() {
+                        println!("  kind         {:?}", io.kind());
+                        println!("  raw_os_error {:?}", io.raw_os_error());
+                    }
+                }
+            }
+        }
+
         // A maintainer verb, deliberately absent from clatch.json and from the manual: it
         // builds a release artifact, it is not something an agent is ever granted. It also
         // runs entirely locally — it is the one verb that does not talk to a running app.

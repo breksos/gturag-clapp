@@ -45,10 +45,8 @@ export default function App() {
     settled.current = window.setTimeout(() => search(value), TYPING_SETTLE_MS);
   }
 
-  const resting = !state.query && state.results.length === 0;
-
   return (
-    <div className={`app ${resting ? "resting" : ""}`}>
+    <div className="app">
       <header className="header">
         <div className="brand">
           <Butterfly />
@@ -73,17 +71,6 @@ export default function App() {
       </header>
 
       <div className="stage">
-        {resting && (
-          <div className="hero">
-            <Butterfly big />
-            <h1>Üniversitenin bütün formları, tek aramada</h1>
-            <p>
-              Formun adını bilmenize gerek yok — ne yapmak istediğinizi yazın.
-              Numarasını biliyorsanız (<code>FR-0083</code>) doğrudan onu yazın.
-            </p>
-          </div>
-        )}
-
         <div className="searchbar">
           <SearchIcon />
           <input
@@ -108,9 +95,10 @@ export default function App() {
 
         <Provisioning state={state} onRetry={() => run({ cmd: "sync" })} />
 
-        {!resting && (
-          <div className="panes">
-            <section className="results">
+        <Strip state={state} />
+
+        <div className="panes">
+          <section className="results">
               <Toolbar state={state} onSort={(by) => run({ cmd: "sort", by })} />
               {state.results.length === 0 ? (
                 <Empty state={state} />
@@ -141,8 +129,7 @@ export default function App() {
               />
               <Feed state={state} />
             </aside>
-          </div>
-        )}
+        </div>
       </div>
     </div>
   );
@@ -405,6 +392,28 @@ function Provisioning({ state, onRetry }: { state: Snapshot; onRetry: () => void
   );
 }
 
+/**
+ * The one line that is always on screen saying WHAT is being looked at and WHOSE it is.
+ *
+ * Taken from jlcpcb, which puts it exactly here for exactly this reason: the point of a
+ * shared screen is knowing when it was not you. It also carries the in-flight state, so an
+ * agent's search is visible WHILE it happens rather than only once it lands.
+ */
+function Strip({ state }: { state: Snapshot }) {
+  return (
+    <div className="strip">
+      <span className="strip-title">{state.title || "GTÜ Formlar"}</span>
+      {!state.query && !state.open && (
+        <span className="strip-count">aramak için yazın</span>
+      )}
+      {state.searchedByName && (
+        <span className="strip-by">arayan: {state.searchedByName}</span>
+      )}
+      {state.searching && <span className="strip-live">çalışıyor…</span>}
+    </div>
+  );
+}
+
 function Toolbar({ state, onSort }: { state: Snapshot; onSort: (by: string) => void }) {
   const options: [string, string][] = [
     ["relevance", "İlgi"],
@@ -433,6 +442,21 @@ function Toolbar({ state, onSort }: { state: Snapshot; onSort: (by: string) => v
 function Empty({ state }: { state: Snapshot }) {
   if (!state.provision.ready && state.provision.index.stage !== "ready") {
     return <div className="empty"><p>Dizin henüz hazır değil.</p></div>;
+  }
+  // Never a different layout — just what this pane has to say. Before any search that is
+  // an invitation; after one that found nothing it is a suggestion.
+  if (!state.query) {
+    return (
+      <div className="empty">
+        <Butterfly big />
+        <p>Üniversitenin bütün formları, tek aramada.</p>
+        <p className="hint">
+          Formun adını bilmenize gerek yok — ne yapmak istediğinizi yazın. Numarasını
+          biliyorsanız (<code>FR-0083</code>) doğrudan onu yazın. Ajanınız da buradan
+          arayabilir; ikinizin bulduğu da bu ekranda görünür.
+        </p>
+      </div>
+    );
   }
   return (
     <div className="empty">
@@ -507,7 +531,7 @@ function FeedRow({ item, agents }: { item: Activity; agents: Agent[] }) {
         // Keyed on the agent id, matching the avatar strip, so one agent is one colour.
         style={mine ? undefined : { color: agentTint(item.who!) }}
       >
-        {nameOf(agents, item.who)}
+        {item.whoName ?? nameOf(agents, item.who)}
       </span>
       <span className="feed-verb">{VERBS[item.action] ?? item.action}</span>
       <span className="feed-detail">{item.detail}</span>

@@ -62,6 +62,9 @@ const BASE: Snapshot = {
   // Highlighting must be checked against the real shape, or the preview would show marks
   // the running app never draws (and miss the stem matches it does).
   terms: ["danışman", "danış", "değiştirmek", "değiş", "istiyorum", "istiy"],
+  title: "“danışman değiştirmek istiyorum” — 5 sonuç",
+  searchedBy: "a-1",
+  searchedByName: "Berk",
   results: RESULTS,
   total: RESULTS.length,
   open: RESULTS[0],
@@ -93,6 +96,23 @@ const STATES: Record<string, Snapshot> = {
   default: BASE,
   empty: { ...BASE, query: "", results: [], total: 0, open: null, saved: [] },
   "no-results": { ...BASE, query: "qwertyuiop", results: [], total: 0, open: null },
+  // The regression: an agent ran `open` with no search behind it. Query empty, results
+  // empty, but a form IS open — the window must show it rather than the welcome hero.
+  "agent-opened": {
+    ...BASE,
+    query: "",
+    title: "",
+    searchedBy: null,
+    searchedByName: null,
+    terms: [],
+    results: [],
+    total: 0,
+    open: RESULTS[0],
+    saved: [],
+    activity: [
+      { seq: 1, who: "a-1", whoName: "Berk", action: "open", detail: "FR-0083 YL-DR Danışman Değişikliği Formu" },
+    ],
+  },
   downloading: stage(
     { stage: "downloading", percent: 37 },
     { stage: "ready" },

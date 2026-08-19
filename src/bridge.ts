@@ -71,6 +71,9 @@ export type Stage =
 export type Activity = {
   seq: number;
   who: string | null;
+  /** The actor's display name, resolved by the CORE against the roster — so the window and
+   *  `gturag status` label the same event identically. */
+  whoName: string | null;
   action: "search" | "open" | "save" | "unsave" | "sort" | "sync";
   detail: string;
 };
@@ -85,6 +88,14 @@ export type Agent = {
 
 export type Snapshot = Snapshotish & {
   query: string;
+  /** One sentence describing what is on screen, built by the core so both surfaces say the
+   *  same thing about the same state. */
+  title: string;
+  /** A search is in flight. */
+  searching: boolean;
+  /** Who ran the search on screen — agent id, or null for the human. */
+  searchedBy: string | null;
+  searchedByName: string | null;
   /** The terms the index matched on — words AND their stems. Highlighting uses these
    *  rather than the raw query, so `danışmanımı` correctly marks `Danışman` in a title. */
   terms: string[];
@@ -143,6 +154,10 @@ export const EMPTY: Snapshot = {
   ok: true,
   rev: -1,
   query: "",
+  title: "",
+  searching: false,
+  searchedBy: null,
+  searchedByName: null,
   terms: [],
   sort: "relevance",
   results: [],
