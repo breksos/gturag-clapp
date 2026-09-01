@@ -33,7 +33,33 @@ import zipfile
 from collections import defaultdict
 from pathlib import Path
 
-PAGE = "https://www.gtu.edu.tr/kategori/2382/0/display.aspx"
+# Every page the university publishes quality documents on, discovered by sweeping its
+# category ids and recording which pages actually link files (tools/build-index/work/
+# pages.json holds that sweep). ONE script owns all of them, because the cull below deletes
+# any forms/*.json it did not write — split across two scripts, each run would wipe the
+# other's output.
+#
+# Not here, deliberately: Görev Tanımları (208), Prosedürler (18), Risk Analizleri and the
+# rest of the SharePoint-hosted families. Their links point at gtu-my.sharepoint.com, which
+# serves an HTML viewer rather than a file; they need their own downloader and are tracked
+# separately rather than half-supported here.
+PAGES = [
+    ("https://www.gtu.edu.tr/kategori/2382/0/display.aspx", "Formlar"),
+    ("https://www.gtu.edu.tr/kategori/3103/0/display.aspx", "Cihaz Kullanım Talimatları"),
+    ("https://www.gtu.edu.tr/kategori/2381/0/display.aspx", "İş Akışları"),
+    ("https://www.gtu.edu.tr/kategori/9598/0/display.aspx", "Anketler"),
+    ("https://www.gtu.edu.tr/kategori/3186/0/display.aspx", "Laboratuvar Talimatları"),
+    ("https://www.gtu.edu.tr/kategori/2364/0/display.aspx", "Politikalar"),
+    ("https://www.gtu.edu.tr/kategori/7097/0/display.aspx", "Raporlar"),
+    ("https://www.gtu.edu.tr/kategori/2877/0/display.aspx", "Kılavuzlar"),
+]
+
+# Yönergeler, Yönetmelikler and a few Kılavuzlar have no listing page anywhere on the site,
+# but their files ARE on the CDN — probe.py resolved them from the university's own register
+# (LS-0003) by constructing and HEAD-checking candidate URLs. Merged in here so the corpus
+# is not missing the university's actual regulations just because nobody links to them.
+EXTRA = WORK_PROBE = "probe.json"
+
 ORIGIN = "https://www.gtu.edu.tr"
 UA = {"User-Agent": "Mozilla/5.0 (compatible; gturag-index/0.1)"}
 
@@ -48,10 +74,21 @@ TXT = WORK / "txt"
 # silently culled all four. The site-wide KVKK notice in the page footer fails both tests,
 # which is the one thing on this page that genuinely is not a form.
 KEEP_ROOT = "/kalite/"
-EN_DIR = "Formlar-İngilizce"
+# The English sub-collections, wherever they appear. A TUPLE, not a string: `any(d in
+# path for d in EN_DIR)` over a bare string iterates its CHARACTERS, and every path
+# containing an "F" would have been called English.
+EN_DIR = ("Formlar-İngilizce", "İngilizce Anketler")
 
 # `FR-0083`, `FR_0083`, `FR 0083`, and the real typo on the page, `FR- 0784`.
-CODE_RE = re.compile(r"\b([A-ZÇĞİÖŞÜ]{2})[-_ ]{0,2}(\d{3,4})\b")
+# `FR-0083`, `FR_0083`, `FR 0083`, the real typo on the page `FR- 0784`, and the compound
+# families the wider corpus brought in: `CH-TL-0001`, `LAB-TL-0042`, `İSG-TL-0007`. The
+# optional middle segment is what makes those ONE code rather than a `CH` plus a stray
+# number — without it 456 device instructions collapse onto each other.
+# The trailing guard is (?!\d), NOT \b: `CH-TL-0001_VAKUMLU_ETUV...` continues
+# with an underscore, which IS a word character, so a word boundary fails there and 444
+# of 457 device instructions came back with no code at all. What we actually mean is
+# "the number ends here" — no further digits.
+CODE_RE = re.compile(r"\b([A-ZÇĞİÖŞÜ]{2,4}(?:-[A-ZÇĞİÖŞÜ]{2,4})?)[-_ ]{0,2}(\d{3,4})(?!\d)")
 REV_RE = re.compile(r"\bR(\d{1,2})\b", re.IGNORECASE)
 
 TEXT_EXT = {"docx", "xlsx", "xlsm", "pdf", "doc", "xls"}
@@ -61,10 +98,26 @@ LEGACY_EXT = {"doc", "xls"}
 
 # ---------------------------------------------------------------- scraping the page
 
-def fetch_page() -> str:
-    req = urllib.request.Request(PAGE, headers=UA)
-    with urllib.request.urlopen(req, timeout=120) as r:
-        return r.read().decode("utf-8", "replace")
+def fetch_page(url: str) -> str:
+    """A listing page, with the same patience the document downloader already had.
+
+    This used to be a bare urlopen. One connection timeout on one of eight pages then
+    aborted the whole build with a traceback — after the university had already served
+    most of them. A page fetch is exactly as likely to blip as a file fetch; it deserves
+    the same three tries.
+    """
+    last = None
+    for attempt in range(3):
+        try:
+            req = urllib.request.Request(url, headers=UA)
+            with urllib.request.urlopen(req, timeout=120) as r:
+                return r.read().decode("utf-8", "replace")
+        except Exception as e:  # noqa: BLE001 — reported below if all tries fail
+            last = e
+            if attempt < 2:
+                print(f"    retrying {url} ({e})")
+                time.sleep(3 * (attempt + 1))
+    raise SystemExit(f"fetch.py: cannot read {url} after 3 tries: {last}")
 
 
 def parse_listing(html: str) -> list[dict]:
@@ -76,14 +129,19 @@ def parse_listing(html: str) -> list[dict]:
         text = re.sub(r"<[^>]+>", " ", label)
         text = text.replace("&nbsp;", " ").replace("&amp;", "&")
         text = re.sub(r"\s+", " ", text).strip()
-        path = urllib.parse.unquote(href)
+        # NFC first, always. The site serves some Turkish filenames DECOMPOSED — `İ` as
+        # `I` + U+0307 — which is a different codepoint from the `İ` in CODE_RE's character
+        # class, so `İA-0163` matched nothing while `İA-0164` matched fine. Normalising the
+        # path and the label here means every comparison downstream is in one form.
+        path = unicodedata.normalize("NFC", urllib.parse.unquote(href))
+        text = unicodedata.normalize("NFC", text)
         url = path if path.startswith("http") else ORIGIN + path
         name = path.rsplit("/", 1)[-1]
         stem, _, ext = name.rpartition(".")
         ext = ext.lower()
 
         in_corpus = KEEP_ROOT in path
-        lang = ("en" if EN_DIR in path else "tr") if in_corpus else None
+        lang = ("en" if any(d in path for d in EN_DIR) else "tr") if in_corpus else None
         m = CODE_RE.search(f"{stem} {text}")
         code = f"{m.group(1)}-{int(m.group(2)):04d}" if m else None
         r = REV_RE.search(stem)
@@ -339,12 +397,37 @@ def main() -> int:
     args = ap.parse_args()
 
     WORK.mkdir(parents=True, exist_ok=True)
-    print(f"→ {PAGE}")
-    records = parse_listing(fetch_page())
+    records = []
+    for url, family in PAGES:
+        html = fetch_page(url)
+        found = parse_listing(html)
+        records += found
+        print(f"→ {family:<28} {len(found)} links  ({url.rsplit('/', 3)[1]})")
+
+    # The regulations nobody links to. probe.py resolved these against the university's own
+    # register by HEAD-checking constructed URLs, so each one here is known to exist.
+    probe = WORK / "probe.json"
+    if probe.exists():
+        extra = json.loads(probe.read_text(encoding="utf-8"))
+        for code, h in extra.items():
+            path = urllib.parse.urlparse(h["url"]).path
+            name = urllib.parse.unquote(path.rsplit("/", 1)[-1])
+            stem, _, ext = name.rpartition(".")
+            records.append(dict(
+                url=h["url"], path=urllib.parse.unquote(path), name=name, ext=ext.lower(),
+                lang="tr", code=code, rev=h["rev"], title=h["title"], label=h["title"],
+            ))
+        print(f"→ {'from the register':<28} {len(extra)} links  (probe.json)")
+
     kept, culled = cull(records)
+    print()
     print(f"  listed {len(records)} links → kept {len(kept)}, culled {len(culled)}")
+    # Only the interesting culls by name; a corpus this size supersedes too many to list.
+    superseded = sum(1 for c in culled if "superseded" in c.get("cull_reason", ""))
     for c in culled:
-        print(f"    – {c['name'][:70]}  ({c['cull_reason']})")
+        if "superseded" not in c.get("cull_reason", ""):
+            print(f"    – {c['name'][:70]}  ({c['cull_reason']})")
+    print(f"    – …and {superseded} superseded revisions")
 
     if args.limit:
         kept = kept[: args.limit]

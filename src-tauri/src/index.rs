@@ -114,7 +114,10 @@ impl Sort {
 /// `İ` to `i̇` (an `i` plus a combining dot), so "İZİN" and "izin" tokenise differently
 /// and a search for the word as the user typed it misses the form that contains it. The
 /// two dotted/dotless pairs are handled first, and everything else takes the default.
-pub fn tokenize(text: &str) -> Vec<String> {
+/// Lowercase the Turkish way — `I`→`ı`, `İ`→`i`, everything else as usual. The one fold
+/// both words and document codes go through, so `İA-0452` and a user's `ia-452` land in
+/// the same space.
+pub fn tr_fold(text: &str) -> String {
     let mut folded = String::with_capacity(text.len());
     for ch in text.chars() {
         match ch {
@@ -123,6 +126,11 @@ pub fn tokenize(text: &str) -> Vec<String> {
             _ => folded.extend(ch.to_lowercase()),
         }
     }
+    folded
+}
+
+pub fn tokenize(text: &str) -> Vec<String> {
+    let folded = tr_fold(text);
     let mut out = Vec::new();
     for raw in folded.split(|c: char| !c.is_alphanumeric()) {
         if raw.len() < 2 && !raw.chars().next().is_some_and(|c| c.is_numeric()) {
@@ -161,55 +169,117 @@ fn stem(word: &str) -> Option<String> {
     }
 }
 
-/// Pull a form code out of free text: `FR-0083`, `fr 83`, `FR_0083`, bare `0083`.
-/// Normalised to the canonical `FR-0083` so it can be compared against [`Doc::code`].
-pub fn find_code(query: &str) -> Option<String> {
-    let up: String = query
-        .chars()
-        .map(|c| if c == 'ı' { 'I' } else { c })
-        .flat_map(char::to_uppercase)
+/// A document code, folded to its canonical comparison key: letter segments joined with
+/// `-`, the trailing number zero-padded to four digits. `İSG-TL-0001` → `isg-tl-0001`,
+/// `FR-83` → `fr-0083`. Comparisons happen in this space and nowhere else, because the
+/// register's codes carry Turkish capitals (`YÖ`, `İA`) that no ASCII uppercase survives.
+pub fn code_key(code: &str) -> String {
+    let folded = tr_fold(code);
+    let mut segs: Vec<String> = folded
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
         .collect();
-    // With a prefix: the normal case.
-    if let Some(caps) = regex_lite_code(&up) {
-        return Some(caps);
+    if let Some(last) = segs.last_mut() {
+        if let Ok(n) = last.parse::<u32>() {
+            *last = format!("{n:04}");
+        }
+    }
+    segs.join("-")
+}
+
+/// The letter part of a code key — `isg-tl-0001` → `isg-tl` — used to learn which
+/// prefixes actually exist in the corpus.
+fn code_prefix(key: &str) -> String {
+    let segs: Vec<&str> = key.split('-').collect();
+    match segs.split_last() {
+        Some((last, rest)) if last.chars().all(|c| c.is_ascii_digit()) && !rest.is_empty() => {
+            rest.join("-")
+        }
+        _ => key.to_string(),
+    }
+}
+
+/// Pull a document code out of free text: `FR-0083`, `fr 83`, `yö-0080`, `İSG-TL-0001`,
+/// bare `0083`. Returns the folded [`code_key`], or `None`.
+///
+/// `prefixes` is the set of letter-prefixes the CORPUS actually contains (learned at
+/// [`Index::build`], derived on the fly in [`resolve`]) — not a hardcoded list. That is
+/// what lets `yılı 2023` pass through as words while `yö 80` is decisively a code: the
+/// difference between them is not their shape, it is that one names a family that exists.
+pub fn find_code(query: &str, prefixes: &std::collections::HashSet<String>) -> Option<String> {
+    let b: Vec<char> = tr_fold(query).chars().collect();
+    let is_sep = |c: char| c == '-' || c == '_' || c == ' ';
+    let mut i = 0;
+    while i < b.len() {
+        // A letter run that starts a word.
+        if !b[i].is_alphabetic() || (i > 0 && b[i - 1].is_alphanumeric()) {
+            i += 1;
+            continue;
+        }
+        let mut j = i;
+        while j < b.len() && b[j].is_alphabetic() {
+            j += 1;
+        }
+        let seg1: String = b[i..j].iter().collect();
+        if !(2..=4).contains(&seg1.chars().count()) {
+            i = j;
+            continue;
+        }
+        // Optionally a second letter segment (İSG-TL, LAB-TL, CH-TL), then digits.
+        for (prefix, mut k) in [(seg1.clone(), j)]
+            .into_iter()
+            .chain(second_segment(&b, j).map(|(s2, k)| (format!("{seg1}-{s2}"), k)))
+            // Longest candidate first, so `isg-tl-1` never half-matches as `isg`.
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+        {
+            if !prefixes.contains(&prefix) {
+                continue;
+            }
+            if k < b.len() && is_sep(b[k]) {
+                k += 1;
+            }
+            let d0 = k;
+            while k < b.len() && b[k].is_ascii_digit() {
+                k += 1;
+            }
+            let digits = k - d0;
+            if (2..=4).contains(&digits) && (k == b.len() || !b[k].is_alphanumeric()) {
+                let n: u32 = b[d0..k].iter().collect::<String>().parse().ok()?;
+                return Some(format!("{prefix}-{n:04}"));
+            }
+        }
+        i = j;
     }
     // A bare number, but only if the query is essentially just that number — "2 nüsha"
-    // must not be read as FR-0002.
-    let t = up.trim();
+    // must not be read as FR-0002. Forms are what people cite by bare number.
+    let t = tr_fold(query);
+    let t = t.trim();
     if t.len() >= 2 && t.len() <= 4 && t.chars().all(|c| c.is_ascii_digit()) {
-        return Some(format!("FR-{:04}", t.parse::<u32>().ok()?));
+        return Some(format!("fr-{:04}", t.parse::<u32>().ok()?));
     }
     None
 }
 
-/// A two-letter prefix, an optional separator, then 2–4 digits. Hand-rolled rather than
-/// pulling in a regex crate for one pattern the app uses once per query.
-fn regex_lite_code(up: &str) -> Option<String> {
-    let b: Vec<char> = up.chars().collect();
-    for i in 0..b.len().saturating_sub(2) {
-        if !b[i].is_ascii_alphabetic() || !b[i + 1].is_ascii_alphabetic() {
-            continue;
-        }
-        // Must start a word, or "PROJEFR-1" would match.
-        if i > 0 && b[i - 1].is_alphanumeric() {
-            continue;
-        }
-        let mut j = i + 2;
-        while j < b.len() && (b[j] == '-' || b[j] == '_' || b[j] == ' ') {
-            j += 1;
-        }
-        let start = j;
-        while j < b.len() && b[j].is_ascii_digit() {
-            j += 1;
-        }
-        let digits = j - start;
-        if (2..=4).contains(&digits) {
-            let n: u32 = b[start..j].iter().collect::<String>().parse().ok()?;
-            let prefix: String = b[i..i + 2].iter().collect();
-            return Some(format!("{prefix}-{n:04}"));
-        }
+/// `-XX` after position `j`: the compound middle of `İSG-TL-0001`. Returns (segment,
+/// position after it).
+fn second_segment(b: &[char], j: usize) -> Option<(String, usize)> {
+    let is_sep = |c: char| c == '-' || c == '_' || c == ' ';
+    if j >= b.len() || !is_sep(b[j]) {
+        return None;
     }
-    None
+    let mut k = j + 1;
+    while k < b.len() && b[k].is_alphabetic() {
+        k += 1;
+    }
+    let seg: String = b[j + 1..k].iter().collect();
+    if (2..=4).contains(&seg.chars().count()) {
+        Some((seg, k))
+    } else {
+        None
+    }
 }
 
 /// One BM25-scorable field: term frequencies per unit, plus the corpus statistics its
@@ -327,6 +397,9 @@ pub struct Index {
     body: Field,
     /// Form titles, one unit per document.
     title: Field,
+    /// The letter-prefixes of every code in the corpus (`fr`, `yö`, `isg-tl`, …), folded.
+    /// [`find_code`] trusts only these, so free text cannot invent a family.
+    prefixes: std::collections::HashSet<String>,
 }
 
 impl Index {
@@ -337,6 +410,7 @@ impl Index {
             // it is embedded in a longer question that `find_code` declines to treat as a
             // bare code.
             title: Field::build(corpus.docs().iter().map(|d| d.title.as_str())),
+            prefixes: corpus_prefixes(corpus),
         }
     }
 
@@ -356,10 +430,10 @@ impl Index {
         let mut placed: HashMap<usize, usize> = HashMap::new(); // doc → index into hits
 
         // 1. An exact code wins outright.
-        let code = find_code(query);
+        let code = find_code(query, &self.prefixes);
         if let Some(code) = &code {
             for (i, d) in corpus.docs().iter().enumerate() {
-                if d.code.as_deref() == Some(code.as_str()) {
+                if d.code.as_deref().map(code_key).as_deref() == Some(code.as_str()) {
                     placed.insert(i, hits.len());
                     hits.push(Hit {
                         doc: i,
@@ -509,20 +583,32 @@ fn code_of(corpus: &Corpus, doc: usize) -> String {
     corpus.docs()[doc].code.clone().unwrap_or_else(|| "ZZ-9999".into())
 }
 
-/// Is this query token merely a piece of the form code we already matched? `FR-0083`
-/// tokenises to `fr` and `0083`, and both are the code, not a topic.
+/// Is this query token merely a piece of the code we already matched? `İSG-TL-0001`
+/// tokenises to `isg`, `tl` and `0001` — every one of them is the code, not a topic.
+/// `code` is already a folded [`code_key`]; tokens arrive folded from [`tokenize`].
 fn is_part_of_code(token: &str, code: &str) -> bool {
-    let (prefix, digits) = match code.split_once('-') {
-        Some(p) => p,
-        None => return false,
-    };
-    if token.eq_ignore_ascii_case(prefix) {
-        return true;
+    for seg in code.split('-') {
+        if token == seg {
+            return true;
+        }
+        if let (Ok(a), Ok(b)) = (token.parse::<u32>(), seg.parse::<u32>()) {
+            if a == b {
+                return true;
+            }
+        }
     }
-    match token.parse::<u32>() {
-        Ok(n) => digits.parse::<u32>().map(|d| d == n).unwrap_or(false),
-        Err(_) => false,
-    }
+    false
+}
+
+/// Every letter-prefix the corpus's codes use, folded — the vocabulary [`find_code`]
+/// trusts. Cheap enough to derive per call where no [`Index`] is at hand.
+fn corpus_prefixes(corpus: &Corpus) -> std::collections::HashSet<String> {
+    corpus
+        .docs()
+        .iter()
+        .filter_map(|d| d.code.as_deref())
+        .map(|c| code_prefix(&code_key(c)))
+        .collect()
 }
 
 /// The index of a document's first chunk — the snippet to show when a document was matched
@@ -551,11 +637,11 @@ pub fn resolve<'a>(corpus: &'a Corpus, needle: &str) -> Option<(usize, &'a Doc)>
     if let Some((i, d)) = corpus.docs().iter().enumerate().find(|(_, d)| d.id == n) {
         return Some((i, d));
     }
-    let code = find_code(n)?;
+    let code = find_code(n, &corpus_prefixes(corpus))?;
     // Prefer Turkish when a code exists in both languages: it is the primary corpus.
     let mut best: Option<(usize, &Doc)> = None;
     for (i, d) in corpus.docs().iter().enumerate() {
-        if d.code.as_deref() == Some(code.as_str()) {
+        if d.code.as_deref().map(code_key).as_deref() == Some(code.as_str()) {
             if d.lang == "tr" {
                 return Some((i, d));
             }
@@ -620,21 +706,52 @@ mod tests {
         assert_eq!(tokenize("Staj BELGESİ"), vec!["staj", "belgesi", "belge"]);
     }
 
+    fn prefixes(list: &[&str]) -> std::collections::HashSet<String> {
+        list.iter().map(|s| s.to_string()).collect()
+    }
+
     #[test]
     fn form_codes_are_recognised_however_they_are_typed() {
+        let p = prefixes(&["fr"]);
         for q in ["FR-0083", "fr 0083", "FR_83", "fr83", "form FR-0083 nerede"] {
-            assert_eq!(find_code(q).as_deref(), Some("FR-0083"), "{q}");
+            assert_eq!(find_code(q, &p).as_deref(), Some("fr-0083"), "{q}");
         }
-        assert_eq!(find_code("0083").as_deref(), Some("FR-0083"));
+        assert_eq!(find_code("0083", &p).as_deref(), Some("fr-0083"));
+    }
+
+    /// The register's families carry Turkish capitals and compound prefixes — the exact
+    /// spellings ASCII-only matching silently dropped.
+    #[test]
+    fn register_codes_are_recognised_turkish_letters_and_all() {
+        let p = prefixes(&["fr", "yö", "ia", "isg-tl", "yn"]);
+        assert_eq!(find_code("YÖ-0080", &p).as_deref(), Some("yö-0080"));
+        assert_eq!(find_code("yö 80", &p).as_deref(), Some("yö-0080"));
+        assert_eq!(find_code("İA-0452 nerede", &p).as_deref(), Some("ia-0452"));
+        assert_eq!(find_code("İSG-TL-0001", &p).as_deref(), Some("isg-tl-0001"));
+        // A single digit stays words — the same guard that keeps `PROJEFR-1` out.
+        assert_eq!(find_code("isg tl 1 talimatı", &p), None);
+        assert_eq!(find_code("isg tl 01 talimatı", &p).as_deref(), Some("isg-tl-0001"));
+        assert_eq!(find_code("YN-0001 yönetmeliği", &p).as_deref(), Some("yn-0001"));
     }
 
     #[test]
     fn ordinary_words_are_not_mistaken_for_codes() {
-        // The over-eager cases: a bare number inside a sentence, and a word that happens
-        // to end in letters before digits.
-        assert_eq!(find_code("2 nüsha halinde doldurulacak"), None);
-        assert_eq!(find_code("staj belgesi"), None);
-        assert_eq!(find_code("PROJEFR-1"), None);
+        let p = prefixes(&["fr", "yö", "tl"]);
+        // The over-eager cases: a bare number inside a sentence, a word that happens to
+        // end before digits, and a letter-run that is not a family the corpus contains.
+        assert_eq!(find_code("2 nüsha halinde doldurulacak", &p), None);
+        assert_eq!(find_code("staj belgesi", &p), None);
+        assert_eq!(find_code("PROJEFR-1", &p), None);
+        assert_eq!(find_code("yılı 2023 raporu", &p), None, "an unknown family is words");
+        assert_eq!(find_code("no 15", &p), None);
+    }
+
+    #[test]
+    fn code_keys_fold_register_codes_to_one_comparison_space() {
+        assert_eq!(code_key("İSG-TL-0001"), "isg-tl-0001");
+        assert_eq!(code_key("YÖ-0080"), "yö-0080");
+        assert_eq!(code_key("FR-83"), "fr-0083", "digits are zero-padded");
+        assert_eq!(code_key("fr_0083"), "fr-0083", "separators are normalised");
     }
 
     #[test]
