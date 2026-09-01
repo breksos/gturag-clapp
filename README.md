@@ -2,9 +2,10 @@
 
 Every form Gebze Teknik Üniversitesi publishes, on one screen you and your agent share.
 
-791 documents from the university's [quality-office Formlar page][formlar] — Turkish and
+1819 documents from the university's own quality system — forms, workflows, device and
+laboratory instructions, directives, regulations, policies, surveys and guides, Turkish and
 English, `.docx`, `.xlsx`, `.pdf` and pre-2007 `.doc`/`.xls` alike — indexed so you can
-search by **what you want to do** rather than by what the form is called.
+search by **what you want to do** rather than by what the document is called.
 
 ```
 gturag search "danışman değiştirmek istiyorum"
@@ -43,9 +44,13 @@ with `k=60` a title matching every query term scores barely above one matching a
 them. That is not a subtlety — it is why `danışman değişikliği` once returned
 `Danışman Değişikliği Formu` fourth.
 
-Turkish gets two things it needs: `İ` folds to `i` (Rust's own `to_lowercase` produces `i`
-plus a combining dot, so `İZİN` never matched `izin`), and every word is indexed alongside
-a 5-character stem, because `danışmanımı` and `Danışman` share no token otherwise.
+Turkish gets three things it needs. `İ` folds to `i` — Rust's own `to_lowercase` produces
+`i` plus a combining dot, so `İZİN` never matched `izin`. Every word is indexed alongside a
+5-character stem, because `danışmanımı` and `Danışman` share no token otherwise. And every
+word is indexed alongside an ASCII-folded spelling, because the university writes Turkish
+both ways: `ETUV KULLANIM TALMATI` is a real filename and 874 titles carry no Turkish
+letters at all. The folded form is a matching aid only — never displayed, because
+`Talimati` is a misspelling and we should not be the ones making it.
 
 ## The repository is the database
 
@@ -54,7 +59,7 @@ There is no server and no hosted vector store. This repo holds both halves:
 | | |
 |---|---|
 | `forms/FR-0083.tr.json` | one file per form — metadata and extracted text, ~2 KB each |
-| `corpus.gtu` | the built index: 791 documents, their passages, and the vectors |
+| `corpus.gtu` | the built index: 1819 documents, 8426 passages, and their vectors |
 
 `forms/` is the source: reviewable, diffable, and small, so when GTÜ revises a form the
 change is visible in a pull request rather than buried in a binary. `corpus.gtu` is derived
@@ -132,7 +137,7 @@ gturag index-corpus forms --model <dir> --built 2026-08-13 --out corpus.gtu
 ```
 
 Chunking happens here rather than in the scraper, so passage policy can change without
-re-scraping 791 documents or needing LibreOffice again. `--built` is an input, not the
+re-scraping 1819 documents or needing LibreOffice again. `--built` is an input, not the
 clock, so two runs over the same database produce byte-identical output.
 
 Users pick the new corpus up with `gturag sync`, which fetches `corpus.gtu` from the

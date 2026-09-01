@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "GTÜ Formlar",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "identifier": "com.breksos.gturag",
   "build": {
     "beforeDevCommand": "npm run dev:web",

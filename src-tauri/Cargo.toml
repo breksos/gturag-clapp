@@ -1,6 +1,6 @@
 [package]
 name = "gturag"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "Search over every form Gebze Technical University publishes, on one screen you and your agent share."
 license = "Apache-2.0"

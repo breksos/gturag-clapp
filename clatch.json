@@ -2,14 +2,14 @@
   "manifestVersion": 1,
   "id": "com.breksos.gturag",
   "name": "GTÜ Formlar",
-  "description": "Gebze Teknik Üniversitesi'nin bütün resmî formları, siz ve ajanınızın paylaştığı tek bir arama çubuğunda. Hangi formu aradığınızı bilmeseniz de olur — ne yapmak istediğinizi yazın.",
-  "about": "A search surface over every form Gebze Technical University publishes on its quality-office Formlar page — 791 documents, Turkish and English, forms and spreadsheets alike. Retrieval is hybrid: an exact form code (FR-0083) wins outright, and everything else is BM25 fused with dense multilingual embeddings, so \"danışman değiştirmek istiyorum\" finds the advisor-change form without naming it. The point is the second surface: every search, every opened form and every saved item is a CLI verb AND a control in the window, over one shared state — the agent's `gturag search staj` types itself into the search bar and fills the results, and the form you open by hand rides along on your next prompt so you can just ask \"bunu nasıl dolduracağım?\". The app retrieves; the agent reads and answers. No model runs on a server, and none ships in the app: the embedder's weights and the prebuilt index are downloaded once, on first run, into the app's own data directory.",
+  "description": "Gebze Teknik Üniversitesi'nin bütün resmî dokümanları — formlar, iş akışları, talimatlar, yönergeler — siz ve ajanınızın paylaştığı tek bir arama çubuğunda. Hangi dokümanı aradığınızı bilmeseniz de olur: ne yapmak istediğinizi yazın.",
+  "about": "A search surface over every document Gebze Technical University publishes in its quality system — 1819 of them: forms, workflows, device and laboratory instructions, directives, regulations, policies, surveys and guides, in Turkish and English. Retrieval is hybrid: an exact document code (FR-0083, İA-0432, CH-TL-0001) wins outright, and everything else is title coverage fused with BM25 and dense multilingual embeddings, so \"danışman değiştirmek istiyorum\" finds the advisor-change form without naming it. Turkish gets what it needs — İ folds correctly, words are indexed with their stems, and titles the university wrote without diacritics still match queries that have them. The point is the second surface: every search, every opened document and every saved item is a CLI verb AND a control in the window, over one shared state — the agent's `gturag search staj` types itself into the search bar and fills the results, and what you open by hand rides along on your next prompt so you can just ask \"bunu nasıl dolduracağım?\". The app retrieves; the agent reads and answers. No model runs on a server: the index ships inside the app and the embedder's weights are downloaded once, on first run, into the app's own data directory.",
   "tags": [
     "education",
     "search",
     "productivity"
   ],
-  "version": "0.1.0",
+  "version": "0.1.1",
   "protocol": 2,
   "icon": "assets/icon.png",
   "launch": {
