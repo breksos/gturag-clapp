@@ -421,6 +421,26 @@ def main() -> int:
             ))
         print(f"→ {'from the register':<28} {len(extra)} links  (probe.json)")
 
+    # The workflows are published as bare codes — `İA-0432.pdf`, no title in the filename
+    # and no link text either — so 379 of them arrived titled only with their own number.
+    # A document whose title is its code is findable by code and by body text and by
+    # nothing else, which for a corpus people search in sentences is most of the way to
+    # invisible. The university's register names every one of them, so borrow the name.
+    register_path = WORK / "register.json"
+    named = 0
+    if register_path.exists():
+        register = json.loads(register_path.read_text(encoding="utf-8"))
+        for r in records:
+            code = r.get("code")
+            if not code or code not in register:
+                continue
+            bare = r["title"].replace(" ", "") == code.replace(" ", "") or not r["title"]
+            better = register[code].get("title", "").strip()
+            if bare and better:
+                r["title"] = unicodedata.normalize("NFC", better)
+                named += 1
+        print(f"→ {'titled from the register':<28} {named} documents")
+
     kept, culled = cull(records)
     print()
     print(f"  listed {len(records)} links → kept {len(kept)}, culled {len(culled)}")

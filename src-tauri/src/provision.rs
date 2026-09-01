@@ -236,28 +236,71 @@ pub fn bundled_index() -> Option<PathBuf> {
 /// update", not "the app no longer works".
 pub fn load_cached_index(cli: &str) -> Option<Corpus> {
     let synced = index_path(cli);
-    if synced.is_file() {
+    let from_sync = if synced.is_file() {
         match Corpus::read(&synced) {
-            Ok(c) => return Some(c),
+            Ok(c) => Some(c),
             Err(e) => {
                 eprintln!("gturag: the synced index is unusable ({e}) — falling back to the bundled one");
                 clappkit::store::quarantine(&synced);
+                None
             }
         }
-    }
-    let bundled = bundled_index()?;
-    match Corpus::read(&bundled) {
+    } else {
+        None
+    };
+
+    let from_bundle = bundled_index().and_then(|p| match Corpus::read(&p) {
         Ok(c) => Some(c),
         Err(e) => {
-            eprintln!("gturag: the bundled index is unusable ({e})");
+            eprintln!("gturag: the bundled index will not load ({e})");
             None
         }
+    });
+
+    // The NEWEST index wins, wherever it came from — not "synced always beats bundled".
+    //
+    // That was the old rule and it is a trap: `sync` writes a copy into the data
+    // directory, the data directory survives updates by design, so a user who ever ran
+    // sync would keep that copy forever — including after installing a release whose
+    // bundled index is newer. It is exactly the failure that hides: the app says "index
+    // ready", every search works, and the answers are quietly a corpus behind. `built` is
+    // an ISO date, so comparing the strings compares the dates.
+    match (from_sync, from_bundle) {
+        (Some(s), Some(b)) => {
+            if b.header.built > s.header.built {
+                eprintln!(
+                    "gturag: the bundled index ({}) is newer than the synced one ({}) — using it",
+                    b.header.built, s.header.built
+                );
+                Some(b)
+            } else {
+                Some(s)
+            }
+        }
+        (Some(s), None) => Some(s),
+        (None, b) => b,
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The trap this rule exists to avoid: `sync` writes into the data directory, the data
+    /// directory survives updates by design, so "synced always wins" means one sync in 2026
+    /// pins that user to a 2026 corpus through every release that follows. It never errors
+    /// and never looks wrong — the app says ready and the answers are just a corpus behind.
+    #[test]
+    fn the_newer_index_wins_whichever_side_it_is_on() {
+        let older = "2026-08-13".to_string();
+        let newer = "2026-09-01".to_string();
+        // The comparison the loader makes, on the same ISO strings the header carries.
+        assert!(newer > older, "ISO dates compare correctly as strings");
+        assert!(!(older > newer));
+        // A same-day rebuild is not "newer", so a synced index is not thrown away for a
+        // bundled one of the same vintage.
+        assert!(!(older > older.clone()));
+    }
 
     #[test]
     fn a_missing_model_is_not_reported_as_present() {

@@ -41,6 +41,12 @@ const CANDIDATES: usize = 200;
 
 /// What a fully-covered title is worth, on the same scale as the fused RRF score.
 ///
+/// Applied LINEARLY to coverage. It used to be squared, back when coverage was a naive
+/// count of matched terms and partial credit needed suppressing. Coverage now weights each
+/// word by its rarity, so 0.6 already means "this title carries 60% of what the query was
+/// about" — squaring that to 0.36 discards the very distinction the weighting exists to
+/// draw, and left the title signal too weak to beat two fused retrievers.
+///
 /// Two retrievers each contribute at most `1/(60+1) ≈ 0.0164`, so an unbeatable ceiling of
 /// evidence from body text and semantics alone is about `0.033`. At 0.20, a title that
 /// contains every term of the query cannot be outvoted by any amount of that — while a
@@ -129,6 +135,38 @@ pub fn tr_fold(text: &str) -> String {
     folded
 }
 
+/// The same expansion as [`tokenize`], but grouped: one inner vector per source WORD,
+/// holding that word's variants (itself, its stem, its ASCII-folded forms).
+///
+/// Coverage needs this and BM25 does not. A word expands to between one and four terms
+/// depending on its length and whether it carries Turkish letters — `kullanım` yields
+/// three, `etüv` yields one — so scoring over the flat term list silently weights a word
+/// by how many spellings it happens to generate. That is how `Baskül Cihazı Kullanım
+/// Talimatı` outranked the oven for `etüv kullanım talimatı`: the two common words brought
+/// six terms between them and the one decisive word brought one.
+pub fn tokenize_grouped(text: &str) -> Vec<Vec<String>> {
+    let folded = tr_fold(text);
+    let mut out = Vec::new();
+    for raw in folded.split(|c: char| !c.is_alphanumeric()) {
+        if raw.len() < 2 && !raw.chars().next().is_some_and(|c| c.is_numeric()) {
+            continue;
+        }
+        let mut group = vec![raw.to_string()];
+        if let Some(s) = stem(raw) {
+            group.push(s);
+        }
+        let flat = ascii_fold(raw);
+        if flat != raw {
+            group.push(flat.clone());
+            if let Some(s) = stem(&flat) {
+                group.push(s);
+            }
+        }
+        out.push(group);
+    }
+    out
+}
+
 pub fn tokenize(text: &str) -> Vec<String> {
     let folded = tr_fold(text);
     let mut out = Vec::new();
@@ -146,8 +184,43 @@ pub fn tokenize(text: &str) -> Vec<String> {
         if let Some(s) = stem(raw) {
             out.push(s);
         }
+        // ...and the same word with its Turkish letters flattened to ASCII.
+        //
+        // The university's own filenames are inconsistent about diacritics: the oven
+        // instruction is published as `ETUV KULLANIM TALMATI`, not `ETÜV ... TALİMATI`, and
+        // 874 titles carry no Turkish letters at all. A user types `etüv`; the document
+        // says `etuv`; they share no token and the right answer never appears. Indexing the
+        // folded form on BOTH sides makes them meet, while the unfolded token above keeps
+        // an exact spelling scoring higher than an approximate one.
+        let flat = ascii_fold(raw);
+        if flat != raw {
+            out.push(flat.clone());
+            if let Some(s) = stem(&flat) {
+                out.push(s);
+            }
+        }
     }
     out
+}
+
+/// Turkish letters flattened to their ASCII skeletons: `ç`→`c`, `ğ`→`g`, `ı`→`i`, `ö`→`o`,
+/// `ş`→`s`, `ü`→`u`. Input is already lowercased by [`tr_fold`].
+///
+/// This is a MATCHING aid, never a display one — nothing folded is ever shown to a human,
+/// because `Talimati` is a misspelling of `Talimatı` and we should not be the ones making
+/// it.
+fn ascii_fold(word: &str) -> String {
+    word.chars()
+        .map(|c| match c {
+            'ç' => 'c',
+            'ğ' => 'g',
+            'ı' => 'i',
+            'ö' => 'o',
+            'ş' => 's',
+            'ü' => 'u',
+            other => other,
+        })
+        .collect()
 }
 
 /// How many characters of a word survive stemming. Turkish IR gets most of the benefit of
@@ -333,43 +406,52 @@ impl Field {
         score
     }
 
-    /// What fraction of the query's distinct terms appear in this unit, in [0,1].
+    /// How much of the query's MEANING this unit carries, in [0,1] — the share of the
+    /// achievable WORDS it contains, each weighted by how rare that word is.
     ///
-    /// Deliberately NOT a BM25 score and NOT a rank. Coverage answers "is this title the
-    /// thing being asked for?", which is the question a title should be judged on, and it
-    /// is comparable across documents in a way neither of the others is. An exact word
-    /// contributes twice (the word and its stem are both terms) while a merely-related
-    /// word contributes once, so `danışman` scores double what `danışmanlığı` does — for
-    /// free, out of the same arithmetic.
-    fn coverage(&self, unit: usize, terms: &[String]) -> f32 {
-        if terms.is_empty() {
+    /// Weighted, because an unweighted share treats every word as equally telling and in
+    /// this corpus that is plainly false: `kullanım talimatı` is in 455 device titles while
+    /// `etüv` is in three. By WORD rather than by term, because a word expands to between
+    /// one and four spellings and scoring the flat list weights it by how many it happened
+    /// to produce. Both mistakes point the same way — the common words outvote the one word
+    /// that names the thing — which is how a weighing scale's manual beat the oven's, and
+    /// `Doktora Başvurusu` beat `Yandal Basvuru Formu`.
+    ///
+    /// A word no title contains is dropped from the denominator entirely: nothing can cover
+    /// `istiyorum`, and leaving it in deflates every score alike until the title signal
+    /// stops outweighing the rank-fused ones.
+    fn coverage(&self, unit: usize, groups: &[Vec<String>]) -> f32 {
+        if groups.is_empty() {
             return 0.0;
         }
         let tf = &self.postings[unit];
-        let mut seen: Vec<&str> = Vec::new();
+        let idf_of = |t: &String| -> Option<f32> {
+            let df = *self.doc_freq.get(t)? as f32;
+            Some((((self.n - df + 0.5) / (df + 0.5)) + 1.0).ln().max(0.0))
+        };
+
         let mut hit = 0.0;
         let mut total = 0.0;
-        for t in terms {
-            if seen.contains(&t.as_str()) {
+        let mut seen: Vec<&str> = Vec::new();
+        for group in groups {
+            let key = group[0].as_str();
+            if seen.contains(&key) {
                 continue;
             }
-            seen.push(t.as_str());
-            // Only terms SOME title contains count towards the denominator. A word like
-            // `istiyorum` ("I want") appears in no form title, so no document can ever
-            // cover it — leaving it in the denominator does not change the ordering, but
-            // it deflates every score alike, and the title signal stops outweighing the
-            // rank-fused ones. Measured against the achievable, `danışmanımı değiştirmek
-            // istiyorum` covers "Danışman Değişikliği Formu" completely, which is the
-            // honest reading of that query.
-            if !self.doc_freq.contains_key(t) {
-                continue;
-            }
-            total += 1.0;
-            if tf.contains_key(t) {
-                hit += 1.0;
+            seen.push(key);
+            // The word's weight is its rarest achievable spelling — the exact one when the
+            // corpus has it, the folded one when the corpus only ever writes it folded.
+            let Some(idf) = group.iter().filter_map(&idf_of).fold(None, |acc: Option<f32>, v| {
+                Some(acc.map_or(v, |a: f32| a.max(v)))
+            }) else {
+                continue; // unachievable: no title contains any spelling of this word
+            };
+            total += idf;
+            if group.iter().any(|t| tf.contains_key(t)) {
+                hit += idf;
             }
         }
-        if total == 0.0 {
+        if total <= 0.0 {
             0.0
         } else {
             hit / total
@@ -426,6 +508,9 @@ impl Index {
         limit: usize,
     ) -> Vec<Hit> {
         let terms = tokenize(query);
+        // Coverage scores WORDS, so it needs the grouped expansion rather than the flat
+        // term list BM25 uses.
+        let groups = tokenize_grouped(query);
         let mut hits: Vec<Hit> = Vec::new();
         let mut placed: HashMap<usize, usize> = HashMap::new(); // doc → index into hits
 
@@ -448,14 +533,19 @@ impl Index {
             }
         }
 
-        // Someone who typed nothing but a form number has asked ONE question and it has
-        // been answered. Padding the reply with 24 unrelated forms — which is what the
-        // retrievers produce for a query with no real words in it — reads as "here are
-        // your results" and buries the actual answer in noise.
-        let bare_code = !hits.is_empty()
-            && code
-                .as_ref()
-                .is_some_and(|c| terms.iter().all(|t| is_part_of_code(t, c)));
+        // Someone who typed nothing but a document number has asked ONE question. Padding
+        // the reply with 24 unrelated documents — which is what the retrievers produce for
+        // a query with no real words in it — reads as "here are your results" and buries
+        // the answer in noise.
+        //
+        // This holds even when NOTHING matched. `YÖ-0080` names a family the corpus has
+        // and a number it does not, and falling through to text search answered it with
+        // İA-0080, İA-0258, İA-0138 — documents that share only a number. An empty result
+        // says "we do not have that one", which is true and useful; a list of numeric
+        // near-misses says something false with total confidence.
+        let bare_code = code
+            .as_ref()
+            .is_some_and(|c| terms.iter().all(|t| is_part_of_code(t, c)));
         if bare_code {
             return hits;
         }
@@ -477,11 +567,11 @@ impl Index {
             // so partial credit falls away fast, and scaled to dominate any realistic
             // accumulation of RRF contributions (two lists cap out around 0.033).
             for (doc, _) in self.title.rank(&terms, CANDIDATES) {
-                let coverage = self.title.coverage(doc, &terms);
+                let coverage = self.title.coverage(doc, &groups);
                 let entry = fused
                     .entry(doc)
                     .or_insert_with(|| (0.0, vec![(first_chunk_of(corpus, doc), 0.0)]));
-                entry.0 += TITLE_WEIGHT * coverage * coverage;
+                entry.0 += TITLE_WEIGHT * coverage;
             }
 
             // 2b. Passage bodies.
@@ -809,6 +899,32 @@ mod tests {
         assert!(resolve(&c, "FR-9999").is_none());
     }
 
+    /// The rare word must decide. `kullanım talimatı` is in 455 device titles and `etüv` in
+    /// three; counting terms equally let the common pair outvote the one word that named
+    /// the thing.
+    #[test]
+    fn a_rare_query_word_outweighs_common_ones() {
+        let mut c = corpus();
+        // One oven, and three "kullanım talimatı" titles that are not ovens.
+        c.header.docs.push(doc("CH-TL-0002.tr", Some("CH-TL-0002"), "tr", "Etüv Kullanım Talimatı"));
+        c.header.chunks.push(Chunk { doc: 3, ord: 0, text: "Etüv Kullanım Talimatı".into() });
+        c.vectors.extend([0.0, 0.0, 0.0]);
+        for (i, name) in ["Baskül Cihazı Kullanım Talimatı", "Beton Mikseri Kullanım Talimatı",
+                          "Kiriş Presi Kullanım Talimatı"].iter().enumerate() {
+            let d = 4 + i as u32;
+            c.header.docs.push(doc(&format!("CH-TL-04{i}.tr"), Some(&format!("CH-TL-040{i}")), "tr", name));
+            c.header.chunks.push(Chunk { doc: d, ord: 0, text: (*name).into() });
+            c.vectors.extend([0.0, 0.0, 0.0]);
+        }
+        let idx = Index::build(&c);
+        let hits = idx.search(&c, "etüv kullanım talimatı", None, Sort::Relevance, 5);
+        assert_eq!(
+            c.docs()[hits[0].doc].code.as_deref(), Some("CH-TL-0002"),
+            "the oven must win; got {:?}",
+            hits.iter().map(|h| &c.docs()[h.doc].title).collect::<Vec<_>>()
+        );
+    }
+
     /// The regression that a real 791-form corpus found and every unit test had missed:
     /// querying a form's own title words ranked an unrelated form above it, because that
     /// form merely *mentioned* the word in its body and so appeared in both retrievers,
@@ -900,6 +1016,22 @@ mod tests {
         }
     }
 
+    /// The university writes the same word both ways. `ETUV KULLANIM TALMATI` is a real
+    /// filename; a user typing `etüv` must still find it.
+    #[test]
+    fn a_diacriticless_title_still_matches_a_properly_spelled_query() {
+        let t = tokenize("etüv");
+        assert!(t.contains(&"etüv".to_string()), "the exact spelling is kept: {t:?}");
+        assert!(t.contains(&"etuv".to_string()), "and the folded one added: {t:?}");
+        // A word with no Turkish letters is not indexed twice.
+        let plain = tokenize("rapor");
+        assert_eq!(plain.iter().filter(|w| *w == "rapor").count(), 1, "{plain:?}");
+        // Both spellings of a longer word meet in the same folded token.
+        let a = tokenize("talimatı");
+        let b = tokenize("talimati");
+        assert!(a.iter().any(|w| b.contains(w)), "{a:?} vs {b:?}");
+    }
+
     #[test]
     fn stemming_collapses_suffixes_without_merging_unrelated_words() {
         assert_eq!(stem("danışmanımı"), stem("danışmanlık"));
@@ -927,6 +1059,23 @@ mod tests {
         // ...but a code WITH a real question still searches for the rest.
         let hits = idx.search(&c, "FR-0083 staj belgesi", None, Sort::Relevance, 25);
         assert!(hits.len() > 1, "a code plus real words must still search");
+    }
+
+    /// A code that names a real family but no real document must answer "not here",
+    /// not "here are three documents that share a number with it".
+    #[test]
+    fn an_unmatched_bare_code_returns_nothing_rather_than_near_misses() {
+        let c = corpus();
+        let idx = Index::build(&c);
+        // FR is a family the corpus has; 9999 is not a document it has.
+        let hits = idx.search(&c, "FR-9999", Some(&[0.0, 1.0, 0.0]), Sort::Relevance, 25);
+        assert!(
+            hits.is_empty(),
+            "got {:?}",
+            hits.iter().map(|h| &c.docs()[h.doc].title).collect::<Vec<_>>()
+        );
+        // ...but the same number WITH a real question still searches.
+        assert!(!idx.search(&c, "FR-9999 staj belgesi", None, Sort::Relevance, 25).is_empty());
     }
 
     #[test]
