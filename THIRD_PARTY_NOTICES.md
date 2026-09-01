@@ -1,34 +1,32 @@
 # Third-party notices
 
-## Lucide — the app icon's glyph
+## The GTÜ emblem — the app's mark
 
-`assets/icon.svg` embeds the unmodified path data of Lucide's `file-search` icon.
+Gebze Teknik Üniversitesi's butterfly emblem is used as this app's icon
+(`assets/icon.svg`, and the PNG/ICO derived from it) and as the mark in its window
+(`src/Emblem.tsx`).
 
-- Project: https://lucide.dev — https://github.com/lucide-icons/lucide
-- Licence: ISC
+- Artwork: `assets/gtu-emblem-source.webp`, a clean rendition of the university's emblem,
+  kept in the repository so the derivation is auditable.
+- Colours: snapped to the values measured from the logo the university itself serves at
+  https://www.gtu.edu.tr/fileman/anasayfa_images/gtu_logo_tr.png — navy `#1a3476`, crimson
+  `#cd1239`, orange `#f58612`. The artwork above is a lossy WebP whose colours drifted in
+  compression; snapping means the app ships the university's palette rather than a codec's
+  approximation of it.
+- Derivation: `scripts/emblem.py` traces those three flat colours into paths. It is a
+  mechanical contour trace — nothing is redrawn, retouched or restyled, which is the point
+  (clappkit `docs/icons.md` rule 5: *use the real mark, and don't design one yourself*).
+  The wordmark is dropped; only the emblem is used.
+- One deliberate deviation: in the window's **dark** colour scheme the emblem's navy is
+  lifted to `#5f80d4`. At its true `#1a3476` it sits at a 1.6:1 contrast ratio against the
+  dark background and the upper wings simply do not render. Crimson and orange are never
+  altered, and the light scheme and the app icon use the mark exactly as drawn.
 
-```
-ISC License
-
-Copyright (c) for portions of Lucide are held by Cole Bemis 2013-2022 as part of
-Feather (MIT). All other copyright (c) for Lucide are held by Lucide Contributors 2022.
-
-Permission to use, copy, modify, and/or distribute this software for any purpose with or
-without fee is hereby granted, provided that the above copyright notice and this
-permission notice appear in all copies.
-
-THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH REGARD TO
-THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS. IN NO
-EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL
-DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN
-AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN
-CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
-```
-
-The tile colours are Gebze Teknik Üniversitesi's own (navy `#1a3b79`, orange `#f26522`),
-read from the university's live stylesheet. **The university's crest is deliberately not
-used**: this is an independent tool, not an official university application, and a mark
-that implied otherwise would be the one detail every user notices.
+**The mark is the university's, and this app is not affiliated with or endorsed by Gebze
+Teknik Üniversitesi.** It is an independent tool that searches the documents the university
+publishes; the emblem identifies whose documents these are, and claims nothing else. It can
+be removed on request — `scripts/emblem.py` and `src/Emblem.tsx` are the only two places it
+lives.
 
 ## intfloat/multilingual-e5-small — the embedding model
 

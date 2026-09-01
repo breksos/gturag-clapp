@@ -12,6 +12,13 @@
   --orange: #f26522;
   --orange-soft: #ffb083;
 
+  /* What the EMBLEM is drawn with — the university's own three, measured from the logo it
+     publishes. Separate from the interface's palette above because they are the mark, not
+     a theme: see the dark block for the one place they move. */
+  --emblem-navy: #1a3476;
+  --emblem-crimson: #cd1239;
+  --emblem-orange: #f58612;
+
   --bg: #f4f6fb;
   --surface: #ffffff;
   --surface-2: #eef1f8;
@@ -38,6 +45,12 @@
     --mark-text: #ffd9b3;
     --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
     --shadow: 0 2px 4px rgba(0, 0, 0, 0.35), 0 12px 28px rgba(0, 0, 0, 0.32);
+
+    /* Only the navy, and only here. #1a3476 against this background is a contrast ratio
+       of 1.6:1 — the emblem's upper wings do not render at all, and half the butterfly
+       goes with them. Crimson and orange read as drawn and are left alone. Standing the
+       mark on a white plate was the alternative, and that puts a box in the interface. */
+    --emblem-navy: #5f80d4;
   }
 }
 
@@ -59,24 +72,17 @@ button { font: inherit; cursor: pointer; }
 
 /* ---- the mark ---------------------------------------------------------- */
 
-.butterfly .wing-left,
-.butterfly .wing-right { fill: var(--navy-700); }
-.butterfly .wing-right { fill: var(--navy-600); }
-.butterfly .body { fill: var(--orange); stroke: var(--orange); }
-.butterfly.muted .wing-left,
-.butterfly.muted .wing-right { fill: var(--line); }
-.butterfly.muted .body { fill: var(--muted); stroke: var(--muted); opacity: 0.5; }
+/* The university's own emblem, traced by scripts/emblem.py. Its fills come from the
+   --emblem-* properties and are never themed further: a brand mark tinted to match a
+   palette is a different mark. */
+.emblem { display: block; flex: none; }
 
-/* A slow, barely-there wingbeat. Never on the hero when the user prefers less motion. */
-@keyframes flutter {
-  0%, 100% { transform: rotateY(0deg); }
-  50%      { transform: rotateY(24deg); }
-}
-.empty .butterfly .wing-left  { transform-origin: 24px 24px; animation: flutter 5.5s ease-in-out infinite; }
-.empty .butterfly .wing-right { transform-origin: 24px 24px; animation: flutter 5.5s ease-in-out infinite reverse; }
-@media (prefers-reduced-motion: reduce) {
-  .empty .butterfly .wing-left, .empty .butterfly .wing-right { animation: none; }
-}
+/* Watermark, for the empty detail pane. Desaturating and fading changes no colour
+   RELATIONSHIP — it is the mark, quieter — where re-filling the paths would not be. */
+.emblem.muted { filter: grayscale(1); opacity: 0.3; margin-inline: auto; }
+
+/* The wingbeat that used to live here went with the hand-drawn butterfly. Rotating one
+   wing of a real logo distorts it, which is the same mistake as redrawing it. */
 
 /* ---- header ------------------------------------------------------------ */
 
@@ -118,7 +124,7 @@ button { font: inherit; cursor: pointer; }
   background: var(--surface-2); padding: 1px 6px; border-radius: 5px;
   font-family: ui-monospace, monospace; font-size: 12.5px; color: var(--accent);
 }
-.empty .butterfly { margin-bottom: 10px; }
+.empty .emblem { margin: 0 auto 10px; }
 
 /* ---- the search bar ---------------------------------------------------- */
 
