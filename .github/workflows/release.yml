@@ -3,10 +3,10 @@
 # PLAYBOOK §6: distribution is a tag, not a folder. A .clapp is per-OS-arch, so a release
 # is one depot per platform, each carrying its own rewritten `connector.cliBin`.
 #
-# Note what this workflow does NOT need: a secret. clappkit pins the clatch crates over
-# SSH, but those crates are VENDORED at the pinned tag in vendor/clatch and patched in by
-# src-tauri/Cargo.toml (PLAYBOOK §8: a dependency you cannot reach is not a dependency),
-# so no build here ever consults that remote.
+# Note what this workflow does NOT need: a secret. clappkit carries clapp-ipc and clapp-pipe
+# as in-tree crates, so there is no private dependency to reach and nothing to vendor
+# (PLAYBOOK §8: a dependency you cannot reach is not a dependency — the SDK solved it at
+# the source). Checkout with submodules is the whole story.
 
 name: release
 

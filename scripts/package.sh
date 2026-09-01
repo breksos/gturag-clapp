@@ -77,6 +77,28 @@ node -e "
   require('fs').writeFileSync('pkg/clatch.json', JSON.stringify(m, null, 2) + '\n');
 "
 
+# Assert every component of what the manifest points at is a safe segment — PLAYBOOK §12b.
+# format.md limits cliBin and launch to [A-Za-z0-9._-] because the value is interpolated
+# into an exec shim, and the launcher enforces that at INSTALL, in front of a user. A depot
+# whose files are all present is not the same thing as a depot that installs; checking here
+# turns that into a build failure we see instead of a refusal they see.
+node -e "
+  const m = require('./pkg/clatch.json');
+  const safe = /^[A-Za-z0-9._-]+\$/;
+  const check = (label, value) => {
+    for (const part of String(value).split('/')) {
+      if (!safe.test(part)) {
+        console.error(\`package.sh: \${label} component '\${part}' is not a safe segment\`);
+        process.exit(1);
+      }
+    }
+  };
+  check('connector.cliBin', m.connector.cliBin);
+  for (const [os, cmd] of Object.entries(m.launch)) {
+    if (os !== 'args') check(\`launch.\${os}\`, cmd);
+  }
+"
+
 # Validate when we can, say so when we cannot. `clatch` is on a developer's machine and is
 # NOT on a CI runner, and requiring it there is what made every platform's Package step fail
 # on the v0.1.0 release run. The depot is still checked below by the smoke test, which is

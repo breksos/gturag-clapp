@@ -1,5 +1,6 @@
 {
   "manifestVersion": 1,
+  "type": "clapp",
   "id": "com.breksos.gturag",
   "name": "GTÜ Formlar",
   "description": "Gebze Teknik Üniversitesi'nin bütün resmî dokümanları — formlar, iş akışları, talimatlar, yönergeler — siz ve ajanınızın paylaştığı tek bir arama çubuğunda. Hangi dokümanı aradığınızı bilmeseniz de olur: ne yapmak istediğinizi yazın.",
@@ -10,6 +11,7 @@
     "productivity"
   ],
   "version": "0.1.1",
+  "publisher": "breksos",
   "protocol": 2,
   "icon": "assets/icon.png",
   "launch": {

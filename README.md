@@ -30,8 +30,11 @@ Retrieval is hybrid, in this order:
 1. **An exact form code is decisive**, and answers alone. A code is a name, not a topic;
    someone who types one has already said what they want, and padding that with two hundred
    near-random results buries the answer.
-2. **Title coverage** — what fraction of the query's *achievable* terms the title contains,
-   squared. A form's title is its identity; a word in its body is a mention.
+2. **Title coverage** — what share of the query's *achievable* words the title contains,
+   each weighted by how rare that word is. A form's title is its identity; a word in its
+   body is a mention. By word rather than by token, because a word expands to between one
+   and four spellings and scoring the expanded list weights it by how many it happened to
+   produce — which is how `kullanım talimatı` outvoted `etüv`.
 3. **BM25** over the passage text, because half of what people type at a form registry is
    literal — *staj*, *yandal*, *mazeret*.
 4. **Dense cosine** over multilingual embeddings, because the other half is not literal at
@@ -101,15 +104,11 @@ npm run verify        # tests → package → validate → CLI ⇄ GUI round-tri
 `clappkit` is carried as a submodule; `git submodule update --remote clappkit` moves it
 forward deliberately.
 
-> **A note on dependencies.** clappkit pins the `clatch-*` crates over
-> `ssh://git@github.com/arfium/clatch.git` — a remote that needs a key. Rather than
-> requiring one on every clone and CI run, the four crates are **vendored** at the pinned
-> tag in `vendor/clatch/` (see `vendor/clatch/VENDORED`), and a `[patch]` in
-> `src-tauri/Cargo.toml` points cargo at that copy, so a plain build never touches the
-> remote at all. `scripts/vendor-clatch.sh <tag>` refreshes the copy at a newer tag;
-> `scripts/with-clatch-deps.sh` (or `.ps1`) remains as a fallback that rewrites the ssh
-> remote to HTTPS for one command, for when the vendor copy itself is being refreshed or
-> bypassed.
+> **A note on dependencies.** There are no private ones. clappkit carries `clapp-ipc` and
+> `clapp-pipe` as in-tree crates, so `cargo build` needs no key, no URL rewrite and no
+> vendored copy — just the submodule. (Earlier versions pinned the launcher's crates over
+> SSH; if you are looking for `vendor/clatch` or `scripts/with-clatch-deps.sh` from an older
+> checkout, they are gone and nothing replaced them.)
 
 ## Rebuilding the corpus
 
@@ -152,9 +151,9 @@ com.breksos.gturag-windows-x64.clapp        binary + icon + manifest + corpus.gt
 com.breksos.gturag-windows-x64.clapp.sha256
 ```
 
-Push a `v*` tag and `release.yml` builds one per platform. It needs no repository secret:
-clappkit pins the clatch crates over SSH, but those crates are vendored in
-`vendor/clatch/` and patched in, so the build never reaches for that remote at all.
+Push a `v*` tag and `release.yml` builds one per platform. It needs no repository secret and
+no credentials of any kind — clappkit's crates are in-tree, so a checkout with submodules is
+everything the build requires.
 
 ## Licence
 

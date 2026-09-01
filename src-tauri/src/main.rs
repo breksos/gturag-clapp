@@ -18,7 +18,6 @@ mod embed;
 mod index;
 mod provision;
 mod state;
-mod webview;
 
 /// Must equal `clatch.json`'s `id`; `bootstrap` hard-errors on a mismatch. A test in
 /// `cli.rs` reads the real manifest and asserts these agree, so the two cannot drift.
@@ -33,7 +32,7 @@ fn main() {
     // a download link instead of a modal dialog from a loader nobody has heard of. A no-op
     // everywhere else, and never on the CLI path — `gturag --help` needs no webview.
     clappkit::role::main_dispatch(APP_ID, CLI, cli::run, || {
-        webview::ensure(CLI);
+        clappkit::webview::ensure(CLI);
         app::run()
     });
 }
