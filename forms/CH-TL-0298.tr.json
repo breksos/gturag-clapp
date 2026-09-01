@@ -1,0 +1,11 @@
+{
+ "code": "CH-TL-0298",
+ "ext": "docx",
+ "id": "CH-TL-0298.tr",
+ "lang": "tr",
+ "name": "CH-TL-0298_Uvp_Hl-2000_Hibridizasyon_Frn_R0.docx",
+ "rev": 0,
+ "text": "UVP HL -2000 HYBRILINKER HİBRİDİZASYON FIRINI KULLANIM TALİMATI\nDök. No\nCH-TL-0298\nİlk Yayın Tarihi\n10.07.2018\nRevizyon Tarihi\n-\nRevizyon No\n0\nSayfa No\nPAGE \\* MERGEFORMAT 1\nHibritleyicinin kullanımı\nKontrol panelindeki “ power ” düğmesini “ON” konumuna getiriniz\n3375661 81280 0 0\nÇalışmak istediğiniz sıcaklığı “ temperature control ” bölümündeki yukarı ve aşağı ok tuşları ile giriniz. İstediğiniz sıcaklık ekranda görüldüğünde bekleyiniz. Ekran, bu sıcaklıkta birkaç saniye durduktan sonra gerçek iç sıcaklığını göstermeye başlayacaktır\ncenter 76835 0 0\nDönüş hızını ayarlamak için “motor control ” bölümündeki “ON” tuşuna basınız ve döner düğmeyi çalışacağınız rpm’ e getiriniz (döner düğme üzerinde rpm’i belirtecek rakamlar olmadığından, minimum 10, maksimum 18 rpm arasında 6 parça ile gösterilen aralıklara göre seçiminizi yapınız). Dönüş istemediğiniz durumlarda “motor control ” bölümünü “OFF” konumunda tutunuz. Cihazı “POWER” düğmesini “OFF” konumuna getirerek kapatınız\n3418839 22225 0 0\nUV çapraz bağlayıcının kullanımı\nKontrol panelindeki “ power ” düğmesini “ON” konumuna getiriniz. Ekranda son girilen değerler görülecektir\n3230880 19686 0 0\nÖrneğinizi çekmecenin iç kısmına yerleştiriniz. “ENERGY” tuşuna basarak istediğiniz enerji miktarını nümerik tuşlarla giriniz (fabrika çıkışı 120.000 mikrojoules /cm 2 olarak ayarlanmıştır ve ekranda 1200 olarak görülür). “ENTER” tuşu ile onaylayınız\n3392805 20320 0 0\n“TIME” tuşu ile UV uygulayacağınız süreyi nümerik tuşlarla giriniz ve “ENTER” tuşu ile onaylayınız. Başlatmak için “START” tuşuna basınız\n3375661 39369 0 0\nSüre sonunda 5 “bip” sesi duyulur ve UV otomatik olarak kendini kapatır. Cihazı “OFF” tuşu ile kapatınız\nHazırlayan\nOnay\nKalite Sistem Onayı\nMoleküler Biyoloji ve Genetik Bölümü Kalite Sorumlusu\nMoleküler Biyoloji ve Genetik Bölümü Onay Sorumlusu\nYönetim Temsilcisi\nFR-0258 Yayın Tarihi: 01.11.2017 Değ.No:0 Değ.Tarihi :-",
+ "title": "Uvp Hl-2000 Hibridizasyon Frn",
+ "url": "https://www.gtu.edu.tr/fileman/Files/UserFiles/kalite/Talimatlar/Cihaz Kullanım Talimatları/CH-TL-0298_Uvp_Hl-2000_Hibridizasyon_Frn_R0.docx"
+}

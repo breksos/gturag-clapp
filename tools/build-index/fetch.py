@@ -39,10 +39,12 @@ from pathlib import Path
 # any forms/*.json it did not write — split across two scripts, each run would wipe the
 # other's output.
 #
-# Not here, deliberately: Görev Tanımları (208), Prosedürler (18), Risk Analizleri and the
-# rest of the SharePoint-hosted families. Their links point at gtu-my.sharepoint.com, which
-# serves an HTML viewer rather than a file; they need their own downloader and are tracked
-# separately rather than half-supported here.
+# Not here, and not reachable at all: Görev Tanımları (208), Prosedürler (18), SPİKler,
+# Risk Analizleri. Those pages link to gtu-my.sharepoint.com, and the link serves an HTML
+# viewer, not a file — fetching one anonymously (browser user-agent, ?download=1, the
+# /:u:/ download form) returns a page whose content is "Sign in". They are behind the
+# university's own authentication, so no scraper of ours can index them; it would take a
+# credentialed export from the quality office. Said plainly here so nobody re-derives it.
 PAGES = [
     ("https://www.gtu.edu.tr/kategori/2382/0/display.aspx", "Formlar"),
     ("https://www.gtu.edu.tr/kategori/3103/0/display.aspx", "Cihaz Kullanım Talimatları"),
@@ -469,10 +471,10 @@ def main() -> int:
                 stale.unlink()
                 removed.append(stale.name)
     for name in removed:
-        print(f"    – removed {name} (no longer listed on the page)")
+        print(f"    – removed {name} (no longer listed on any source page)")
 
     empty = [d["id"] for d in docs if d["chars"] == 0]
-    report = dict(page=PAGE, listed=len(records), kept=len(kept), culled=len(culled),
+    report = dict(pages=[u for u, _ in PAGES], listed=len(records), kept=len(kept), culled=len(culled),
                   culled_detail=[{"name": c["name"], "reason": c["cull_reason"]} for c in culled],
                   documents=len(docs), removed=removed,
                   download_failures=failures, no_text=empty,

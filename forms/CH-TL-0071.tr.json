@@ -1,0 +1,11 @@
+{
+ "code": "CH-TL-0071",
+ "ext": "docx",
+ "id": "CH-TL-0071.tr",
+ "lang": "tr",
+ "name": "CH-TL-0071_KSL-1100X_KUTU_FIRIN_KULLANIM_TALMATI.docx",
+ "rev": 0,
+ "text": "247650 18415 0 0 Fırının fişi pirize takılır. Güç düğmesi açılır.\ncenter 3810 0 0\n296545 107950 0 0\nProgramlamaya girmek için “&lt;” tuşuna basılır. center 229870 0 0\n296545 57785\nProgramlama ekranına gelen C-01 oda sıcaklığı olarak girilir. [Aşağı yukarı yön tuşları ile değerler girilir.] “set” tuşu ile programlamaya devam edilir. T-01 istenilen sıcaklığa çıkış süresi olarak girilir. C-02 çıkılmak istenen sıcaklık, t-02 bu sürede kalma süresi, C-03 beklenilen sıcaklık olarak girilir. İki veya daha fazla sıcaklık kademesi için işlemler tekrarlanır. Programlamayı bitirmek için son gelinen “t” süresi -21 olarak girilir. 0 0\nProgramlama ekranına gelen C-01 oda sıcaklığı olarak girilir. [Aşağı yukarı yön tuşları ile değerler girilir.] “set” tuşu ile programlamaya devam edilir. T-01 istenilen sıcaklığa çıkış süresi olarak girilir. C-02 çıkılmak istenen sıcaklık, t-02 bu sürede kalma süresi, C-03 beklenilen sıcaklık olarak girilir. İki veya daha fazla sıcaklık kademesi için işlemler tekrarlanır. Programlamayı bitirmek için son gelinen “t” süresi -21 olarak girilir.\ncenter 3810\n555625 2280920\nFırını kapatmak için power düğmesine basılır ve fiş pirizden çıkartılır. 0 0\nFırını kapatmak için power düğmesine basılır ve fiş pirizden çıkartılır. center 433705 0 0 288925 109220\nProgramı çalıştırmak için RUN tuşuna uzun basılır. 0 0\nProgramı çalıştırmak için RUN tuşuna uzun basılır. center 1659255 768985 1163955\nÇalışan programı sonlandırmak için ise END tuşuna uzun basılır. 0 0\nÇalışan programı sonlandırmak için ise END tuşuna uzun basılır.\nHazırlayan\nOnay\nKalite Sistem Onayı\nMalzeme Bilimi ve Müh. Bölümü Kalite Sorumlusu\nMalzeme Bilimi ve Müh. Bölümü Onay Sorumlusu\nYönetim Temsilcisi\nFR-02 58 Yayın Tarihi: 01.11 .2017 Değ.No:0 Değ.Tarihi :-\nKSL-1100X KUTU FIRIN\nKULLANIM TALİMATI\nDok. No\nCH-TL-00 71\nYayın Tarihi\n03.11.2017\nRevizyon Tarihi\n-\nRevizyon No\n0\nSayfa No\n1",
+ "title": "KSL-1100X KUTU FIRIN KULLANIM TALMATI",
+ "url": "https://www.gtu.edu.tr/fileman/Files/UserFiles/kalite/Talimatlar/Cihaz Kullanım Talimatları/CH-TL-0071_KSL-1100X_KUTU_FIRIN_KULLANIM_TALMATI.docx"
+}

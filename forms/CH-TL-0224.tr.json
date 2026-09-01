@@ -1,0 +1,11 @@
+{
+ "code": "CH-TL-0224",
+ "ext": "doc",
+ "id": "CH-TL-0224.tr",
+ "lang": "tr",
+ "name": "CH-TL-0224_HPLC_kullanm_talimat_R0.doc",
+ "rev": 0,
+ "text": "1-AMAÇ\nBu iş talimatı , Gebze Teknik Üniversitesi Çevre Mühendisliği Bölümü ZL01 no’lu Laboratuvarı’ndaki Shimadzu HPLC cihazının güvenli ve doğru kullanımını sağlamak amacıyla hazırlanmıştır.\n2-KAPSAM\nZL01 no’lu Laboratuvarı’nda bulunan Shimadzu HPLC ile analiz yapılması işlemini kapsar.\n3-SORUMLULUKLAR\nBu talimatın uygulanmasından, ZL01 no’lu Laboratuvarı’nda bulunan Shimadzu HPLC ile analiz yapan herkes sorumludur.\n4-İLGİLİ DOKÜMAN VE KAYITLAR\n5-UYGULAMA\nCihazı çalıştırmadan önce mobil fazın dolu olduğundan emin olunuz.\nSağdan solu doğru “POWER” tuşlarına basarak cihazları çalıştırınız.\nBilgisayarı açınız.\n“ LCSOLUTIONS” programını çalıştırınız.\n567055 635\n“ 2” no’lu programı seçiniz.\nVanayı açarak “PURGE” tuşuna basınız. Purge işlemi bittiğinde cihaz akış hızı ve basıncı gösterecektir. Purge vanasını kapatarak akış için onay veriniz. En az 15 dakika akışın ardından balance hücresini doldurmak için onay veriniz.\nCihazın kapağını açınız. Numunenizi 1 numaralı hücreye yerleştiriniz. “Single start” seçeneğinden numunenizin adını yazarak analizi onaylayınız.\nCihazı kapatmadan önce, son numunenin ardından cihazın kendisini temizlemesi için 15 dakika bekleyiniz.\nCihazı açış yönünüzün tersine doğru “POWER” düğmelerine basarak kapatınız.\n6-KAYITLAMA VE ARŞİVLEME\nBu talimat ve ilgili form/dokümanlar laboratuvar defterine kayıt edilir ve laboratuvarda arşi vlenir.\nYayın Tarihi\nYayın No\nHazırlayan\nOnay\nKalite Sistem Onayı\n23.05.2018\n1\nÇevre Müh. Bölümü Kalite Sorumlusu\nÇevre Müh. Bölümü Onay Sorumlusu\nYönetim Temsilcisi\nDeğ. Tarihi\nDeğ. No\n-\n0\nForm No:FR-0141 Yayın Tarihi:21.06.2017 Değ.No:1 Değ. Tarihi:18.05.2018\nHPLC CİHAZI KULLANIM TALİMATI\nTalimat No CH-TL-0224\nSayfa No: PAGE 3",
+ "title": "HPLC kullanm talimat",
+ "url": "https://www.gtu.edu.tr/fileman/Files/UserFiles/kalite/Talimatlar/Cihaz Kullanım Talimatları/CH-TL-0224_HPLC_kullanm_talimat_R0.doc"
+}

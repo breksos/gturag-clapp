@@ -1,0 +1,11 @@
+{
+ "code": "CH-TL-0217",
+ "ext": "doc",
+ "id": "CH-TL-0217.tr",
+ "lang": "tr",
+ "name": "CH-TL-0217_GAZ_KROMOTOGRAFS_KAPAMA_TALMATI_R0.doc",
+ "rev": 0,
+ "text": "1-AMAÇ\nBu iş talimatı , GTÜ Çevre Mühendisliği Enstrümantal Analiz Laboratuvarı’ndaki Agilent Technologies Gaz Kromotografisi- cihazının güvenli ve doğru kapatılmasını sağlamak amacıyla hazırlanmıştır.\n2-KAPSAM\nÇevre Mühendisliği Enstrümantal Analiz Laboratuvarı’nda bulunan Gaz Kromatografisi’nde yapılan niteliksel ve niceliksel analiz işlemi için cihazın kapanışını kapsar.\n3-SORUMLULUKLAR\nBu talimatın uygulanmasından, Çevre Mühendisliği Enstrümantal Analiz Laboratuvarı’nda Gaz Kromatografisi kapanışını yapacak görevli çalışanlar sorumludur.\n4-İLGİLİ DOKÜMAN VE KAYITLAR\n5-UYGULAMA\nGaz Kromatografisi (GC)’ne bağlı 2 farklı detektör (Alev İyonlaşma Detektörü ve Elektron Yakalama Detektörü ) bulunmaktadır. 2 detektör için de genel basamaklar aynı olduğundan aynı talimatnameye yazılmışlardır. Farklı detektörler için uygulanacak farklı adımlar parantez içinde “(..)” belirtilmiştir.\nÇalışma sonunda; cihaz Online Chemstation ekranında “DEROFF” metoduna alınır.\nDEROFF moduna geçtikten sonra “Ready” uyarısının gelmesi beklenir.\n“ Ready” uyarısı geldikten sonra GC kapatılır.\nBilgisayar kapatılır.\n.(Alev İyonlaşma Detektörü için: Hidrojen jeneratörü kapatılır)\nAnaliz için hangi gazlar açılmışsa o gazlar kapatılır. (Kuru hava, Helyum, Azot, Argon)\nBu cihaza bağlı gaz tüpleri başka bir cihazı da beslediğinden dolayı gazları kapatırken diğer cihazda birisinin çalışıp çalışmadığı kontrol edilerek kapatılmalıdır.\n6-KAYITLAMA VE ARŞİVLEME\nBu talimat ve ilgili form/dokümanlar laboratuvar defterine kayıt edilir ve laboratuvarda arşi vlenir.\nYayın Tarihi\nYayın No\nHazırlayan\nOnay\nKalite Sistem Onayı\n05.07.2018\n1\nÇevre Müh. Bölümü Kalite Sorumlusu\nÇevre Müh. Bölümü Onay Sorumlusu\nYönetim Temsilcisi\nDeğ. Tarihi\nDeğ. No\n-\n0\nForm No:FR-0141 Yayın Tarihi:21.06.2017 Değ.No:1 Değ. Tarihi:18.05.2018\nGAZ KROMATOGRAFİSİ (GC) KAPAMA TALİMATI\nTalimat No CH-TL-0217\nSayfa No: PAGE 2",
+ "title": "GAZ KROMOTOGRAFS KAPAMA TALMATI",
+ "url": "https://www.gtu.edu.tr/fileman/Files/UserFiles/kalite/Talimatlar/Cihaz Kullanım Talimatları/CH-TL-0217_GAZ_KROMOTOGRAFS_KAPAMA_TALMATI_R0.doc"
+}

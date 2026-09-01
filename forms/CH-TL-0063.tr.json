@@ -1,0 +1,11 @@
+{
+ "code": "CH-TL-0063",
+ "ext": "docx",
+ "id": "CH-TL-0063.tr",
+ "lang": "tr",
+ "name": "CH-TL-0063_NABERTHERM_KUTU_FIRIN_KULLANIM_TALMATI.docx",
+ "rev": 0,
+ "text": "748030 8255 0 0 Fırının fişi pirize takılır. Güç düğmesi açık ( ein ) konumuna getirilir.\ncenter 87630 0 0\n136525 214630 0 0\nProgramlama için “ prog ” tuşuna basılır. Yön tuşları ile birinci satırda ki “S 01” ve “Ta” ya gelinir.\ncenter 57150 0 0\n296545 154940\nİlk olarak Ta ortam sıcaklığı olarak girilir ve “ enter ” a basılır. Yön tuşları ile Tb ye çıkılmak istenen sıcaklığı, “ h:min ” e ise süre saat:dakika cinsinden girilir. Bu şekilde sıvaklık rejimi programlanır. 0 0\nİlk olarak Ta ortam sıcaklığı olarak girilir ve “ enter ” a basılır. Yön tuşları ile Tb ye çıkılmak istenen sıcaklığı, “ h:min ” e ise süre saat:dakika cinsinden girilir. Bu şekilde sıvaklık rejimi programlanır.\ncenter 258445\n281305 97155\n“ start ” tuşuna basılarak fırın çalıştırılır. Durdurmak istendiğinde “stop” tuşu kullanılır. Bütün programı sıfırlamak için “ clear ” tuşuna basılır. 0 0\n“ start ” tuşuna basılarak fırın çalıştırılır. Durdurmak istendiğinde “stop” tuşu kullanılır. Bütün programı sıfırlamak için “ clear ” tuşuna basılır.\n776605 1019175\nKapatmak için güç düğmesi kapalı ( aus ) durumuna getirilir ve fiş pirizden çekilir. 0 0\nKapatmak için güç düğmesi kapalı ( aus ) durumuna getirilir ve fiş pirizden çekilir. center 357505 0 0\nHazırlayan\nOnay\nKalite Sistem Onayı\nMalzeme Bilimi ve Müh. Bölümü Kalite Sorumlusu\nMalzeme Bilimi ve Müh. Bölümü Onay Sorumlusu\nYönetim Temsilcisi\nFR-02 58 Yayın Tarihi: 01.11 .2017 Değ.No:0 Değ.Tarihi :-\nNABERTHERM KUTU FIRIN\nKULLANIM TALİMATI\nDok. No\nCH-TL-00 63\nYayın Tarihi\n03.11.2017\nRevizyon Tarihi\n-\nRevizyon No\n0\nSayfa No\n1",
+ "title": "NABERTHERM KUTU FIRIN KULLANIM TALMATI",
+ "url": "https://www.gtu.edu.tr/fileman/Files/UserFiles/kalite/Talimatlar/Cihaz Kullanım Talimatları/CH-TL-0063_NABERTHERM_KUTU_FIRIN_KULLANIM_TALMATI.docx"
+}
