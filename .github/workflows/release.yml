@@ -36,15 +36,6 @@ jobs:
         with:
           submodules: recursive   # clappkit is the foundation, not an optional extra
 
-      - name: Assert an MSVC host on Windows
-        if: runner.os == 'Windows'
-        shell: bash
-        # WebView2: the MSVC toolchain links the LOADER statically, so the depot ships zero
-        # DLLs. A -gnu host would need WebView2Loader.dll beside the exe, and the failure
-        # is silent (PLAYBOOK §9).
-        run: |
-          rustc -vV | grep -q 'host: .*-msvc' || { echo "not an MSVC host"; exit 1; }
-
       - name: Linux build dependencies
         if: runner.os == 'Linux'
         run: |
@@ -59,6 +50,20 @@ jobs:
           # cache and the next attempt starts from zero — which is most of why a cold
           # Windows build is ~15 minutes (PLAYBOOK §9).
           cache-on-failure: true
+
+      - name: Assert an MSVC host on Windows
+        if: runner.os == 'Windows'
+        shell: bash
+        # AFTER the toolchain action, not before it: this asserts a property of the rustc
+        # the build will use, and running it first asked about whatever rustc the image
+        # happened to ship — which is what failed the v0.1.0 release run.
+        #
+        # WebView2: the MSVC toolchain links the LOADER statically, so the depot ships zero
+        # DLLs. A -gnu host would need WebView2Loader.dll beside the exe, and the failure is
+        # silent (PLAYBOOK §9).
+        run: |
+          rustc -vV
+          rustc -vV | grep -q 'host: .*-msvc' || { echo "::error::not an MSVC host"; exit 1; }
 
       - uses: actions/setup-node@v4
         with:
