@@ -97,11 +97,14 @@ npm run verify        # tests → package → validate → CLI ⇄ GUI round-tri
 forward deliberately.
 
 > **A note on dependencies.** clappkit pins the `clatch-*` crates over
-> `ssh://git@github.com/arfium/clatch.git`. The same repository is public over HTTPS, so
-> rather than requiring a deploy key on every clone and CI run, build through
-> `scripts/with-clatch-deps.sh` (or `.ps1`), which rewrites that one remote for the
-> duration of one command and touches nothing global. If you hold a key for that remote,
-> ignore all of this and build normally.
+> `ssh://git@github.com/arfium/clatch.git` — a remote that needs a key. Rather than
+> requiring one on every clone and CI run, the four crates are **vendored** at the pinned
+> tag in `vendor/clatch/` (see `vendor/clatch/VENDORED`), and a `[patch]` in
+> `src-tauri/Cargo.toml` points cargo at that copy, so a plain build never touches the
+> remote at all. `scripts/vendor-clatch.sh <tag>` refreshes the copy at a newer tag;
+> `scripts/with-clatch-deps.sh` (or `.ps1`) remains as a fallback that rewrites the ssh
+> remote to HTTPS for one command, for when the vendor copy itself is being refreshed or
+> bypassed.
 
 ## Rebuilding the corpus
 
@@ -145,8 +148,8 @@ com.breksos.gturag-windows-x64.clapp.sha256
 ```
 
 Push a `v*` tag and `release.yml` builds one per platform. It needs no repository secret:
-clappkit pins the clatch crates over SSH, but the same repo is public over HTTPS, so a
-single `insteadOf` rewrite in the environment replaces the whole deploy-key problem.
+clappkit pins the clatch crates over SSH, but those crates are vendored in
+`vendor/clatch/` and patched in, so the build never reaches for that remote at all.
 
 ## Licence
 

@@ -534,7 +534,6 @@ dependencies = [
 [[package]]
 name = "clatch-core"
 version = "0.4.3"
-source = "git+ssh://git@github.com/arfium/clatch.git?tag=v0.4.3#faef95cf2b42dcbd165f6a11cde7b1b4547e9c54"
 dependencies = [
  "async-trait",
  "chrono",
@@ -548,7 +547,6 @@ dependencies = [
 [[package]]
 name = "clatch-ipc"
 version = "0.4.3"
-source = "git+ssh://git@github.com/arfium/clatch.git?tag=v0.4.3#faef95cf2b42dcbd165f6a11cde7b1b4547e9c54"
 dependencies = [
  "clatch-core",
  "serde",
@@ -559,7 +557,6 @@ dependencies = [
 [[package]]
 name = "clatch-pipe"
 version = "0.4.3"
-source = "git+ssh://git@github.com/arfium/clatch.git?tag=v0.4.3#faef95cf2b42dcbd165f6a11cde7b1b4547e9c54"
 dependencies = [
  "clatch-core",
  "clatch-ipc",
@@ -572,7 +569,6 @@ dependencies = [
 [[package]]
 name = "clatch-registry"
 version = "0.4.3"
-source = "git+ssh://git@github.com/arfium/clatch.git?tag=v0.4.3#faef95cf2b42dcbd165f6a11cde7b1b4547e9c54"
 dependencies = [
  "chrono",
  "clatch-core",

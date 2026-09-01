@@ -61,3 +61,19 @@ strip = true
 # src-tauri is its own workspace: the repo root holds no Cargo.toml, and clappkit is a
 # submodule with a workspace of its own.
 [workspace]
+
+# clappkit pins the clatch crates to a private repository over ssh://. Building this app
+# must not depend on having a key for that repository — not on a CI runner, not on a fresh
+# machine, not in five years (PLAYBOOK §8: a dependency you cannot reach is not a
+# dependency) — so the crates are VENDORED at the pinned tag (vendor/clatch, copied
+# verbatim from tag v0.4.3) and this patch points cargo at that copy instead.
+#
+# The URL below has to match clappkit's dependency URL exactly, character for character;
+# that is how cargo knows which source it is replacing. Refresh with
+# scripts/vendor-clatch.sh <tag>, which re-copies and records the tag in
+# vendor/clatch/VENDORED.
+[patch."ssh://git@github.com/arfium/clatch.git"]
+clatch-core     = { path = "../vendor/clatch/crates/clatch-core" }
+clatch-ipc      = { path = "../vendor/clatch/crates/clatch-ipc" }
+clatch-pipe     = { path = "../vendor/clatch/crates/clatch-pipe" }
+clatch-registry = { path = "../vendor/clatch/crates/clatch-registry" }

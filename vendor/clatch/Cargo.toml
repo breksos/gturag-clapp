@@ -1,0 +1,46 @@
+# VENDORED — do not edit by hand. Copied verbatim from github.com/arfium/clatch at
+# tag v0.4.3 by scripts/vendor-clatch.sh, so that building this app needs no access to
+# that repository: no deploy key, no SSH agent on a CI runner, nothing to configure
+# before `cargo build`. src-tauri/Cargo.toml [patch] points cargo here.
+# Clatch workspace. Modüller reference/ specs'e göre eklenir (reference/PLAN.md).
+[workspace]
+members  = ["crates/clatch-core", "crates/clatch-ipc", "crates/clatch-pipe", "crates/clatch-registry"]
+resolver = "2"
+
+[workspace.package]
+version    = "0.4.3"
+edition    = "2021"
+license    = "Apache-2.0"
+repository = "https://github.com/arfium/clatch"
+
+[workspace.dependencies]
+# Karar (reference/agent-engine.md): agent runtime kopyalanmaz, ayrı bir üretim
+# olarak kalır ama artık tek repo (2026-07-09, subtree merge). ./agent-engine
+# bu workspace'in bir üyesi; harici fetch yok, private cross-repo CI auth'u
+# gerekmez. Genel/standalone lib ilkesi kod düzeyinde korunur (Clatch-specific
+# hale gelmez), sadece fiziksel konumu değişti.
+# Çekirdek bağımlılıklar; eklendikçe büyür.
+serde       = { version = "1", features = ["derive"] }
+serde_json  = "1"
+thiserror   = "2"
+futures     = "0.3"
+async-trait = "0.1"
+tokio       = { version = "1", features = ["rt-multi-thread", "macros", "sync", "net", "io-util", "io-std", "time", "process", "signal"] }
+tokio-util  = { version = "0.7" }
+chrono      = { version = "0.4", features = ["serde"] }
+dirs        = "5"
+getrandom   = "0.2"
+# Avatar upload decode (reference/data-structures.md § Agent avatar): the app
+# pipe / admin wire carry image bytes as base64; the daemon decodes to validate.
+base64      = "0.22"
+# Distribution fetch/verify/extract (reference/install.md, launch.md § Distribution):
+# deliberately the light set (ureq over reqwest), lives in clatch-registry::fetch.
+ureq        = "2"
+sha2        = "0.10"
+flate2      = "1"
+tar         = "0.4"
+zip         = "2"
+
+[profile.release]
+strip = true
+lto   = "thin"

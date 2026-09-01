@@ -18,6 +18,7 @@ mod embed;
 mod index;
 mod provision;
 mod state;
+mod webview;
 
 /// Must equal `clatch.json`'s `id`; `bootstrap` hard-errors on a mismatch. A test in
 /// `cli.rs` reads the real manifest and asserts these agree, so the two cannot drift.
@@ -27,5 +28,12 @@ const APP_ID: &str = "com.breksos.gturag";
 const CLI: &str = "gturag";
 
 fn main() {
-    clappkit::role::main_dispatch(APP_ID, CLI, cli::run, app::run);
+    // Windows draws this window with the Edge WebView2 Runtime, which is not part of the
+    // app. Checked here, before Tauri looks for it, so a missing runtime is a sentence with
+    // a download link instead of a modal dialog from a loader nobody has heard of. A no-op
+    // everywhere else, and never on the CLI path — `gturag --help` needs no webview.
+    clappkit::role::main_dispatch(APP_ID, CLI, cli::run, || {
+        webview::ensure(CLI);
+        app::run()
+    });
 }

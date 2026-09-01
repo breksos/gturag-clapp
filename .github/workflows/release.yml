@@ -4,10 +4,9 @@
 # is one depot per platform, each carrying its own rewritten `connector.cliBin`.
 #
 # Note what this workflow does NOT need: a secret. clappkit pins the clatch crates over
-# SSH, and the reflex is a deploy key in `secrets.*` — which then cannot be used in a
-# job-level `if:`, which is how people end up writing a `gate` job to work around it
-# (PLAYBOOK §8). The repository is public over HTTPS, so one `insteadOf` rewrite in the
-# environment replaces the whole credentials problem.
+# SSH, but those crates are VENDORED at the pinned tag in vendor/clatch and patched in by
+# src-tauri/Cargo.toml (PLAYBOOK §8: a dependency you cannot reach is not a dependency),
+# so no build here ever consults that remote.
 
 name: release
 
@@ -18,12 +17,6 @@ on:
 
 permissions:
   contents: write
-
-env:
-  CARGO_NET_GIT_FETCH_WITH_CLI: "true"
-  GIT_CONFIG_COUNT: "1"
-  GIT_CONFIG_KEY_0: url.https://github.com/arfium/clatch.git.insteadOf
-  GIT_CONFIG_VALUE_0: ssh://git@github.com/arfium/clatch.git
 
 jobs:
   build:
