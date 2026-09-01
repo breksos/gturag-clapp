@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "The GTU Formlar webview may call the app's commands and listen for the state event. Without core:event:default, Tauri v2 denies listen() and the window never receives a pushed snapshot: it updates only when the human acts, so nothing an agent does appears until you touch the search bar. useSnapshot swallows that rejection, so the failure is silent.",
+  "windows": ["main"],
+  "permissions": ["core:default", "core:event:default", "core:window:default"]
+}
