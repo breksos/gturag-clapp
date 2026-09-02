@@ -363,10 +363,7 @@ connect      FAILED");
         // builds a release artifact, it is not something an agent is ever granted. It also
         // runs entirely locally — it is the one verb that does not talk to a running app.
         "index-corpus" => {
-            match crate::build_index::from_args(&args)
-                .and_then(|(work, model, out, source, built)| {
-                    crate::build_index::run(&work, &model, &out, &source, &built)
-                }) {
+            match crate::build_index::from_args(&args).and_then(|o| crate::build_index::run(&o)) {
                 Ok(()) => {}
                 Err(e) => die(&format!("{e:#}")),
             }
