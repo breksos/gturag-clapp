@@ -87,6 +87,8 @@ export type Agent = {
 };
 
 export type Snapshot = Snapshotish & {
+  /** The app's identity, from the manifest — the wordmark reads this, not a constant. */
+  app: { name: string };
   query: string;
   /** One sentence describing what is on screen, built by the core so both surfaces say the
    *  same thing about the same state. */
@@ -111,7 +113,11 @@ export type Snapshot = Snapshotish & {
     ready: boolean;
     summary: string;
   };
-  corpus: { documents: number; chunks: number; built: string; source: string } | null;
+  corpus: {
+    documents: number; chunks: number; built: string; source: string;
+    /** Where `sync` fetches a newer index from — carried by the index itself. */
+    updateUrl: string | null;
+  } | null;
   agents: Agent[];
   /** What both surfaces have been doing, oldest first. */
   activity: Activity[];
@@ -151,6 +157,7 @@ export function isMatch(word: string, terms: string[]): boolean {
 }
 
 export const EMPTY: Snapshot = {
+  app: { name: "" },
   ok: true,
   rev: -1,
   query: "",

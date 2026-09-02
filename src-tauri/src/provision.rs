@@ -1,10 +1,16 @@
-//! First run: fetch the embedder's weights and the corpus index into the app's own data
-//! directory.
+//! First run: fetch the embedder's weights into a cache every clapp of this family shares,
+//! and a newer corpus index into the app's own data directory when the human asks.
 //!
 //! This is why the `.clapp` is a few megabytes and not half a gigabyte. The depot carries
-//! the binary, an icon and a manifest; the model parameters and the index are downloaded
-//! once, here, into `data_dir()`. Nothing about retrieval lives on a server — after this
-//! step the app is entirely local and works offline.
+//! the binary, a manifest, and a bundled index; the model parameters are downloaded once
+//! PER MACHINE — `gturag`, a `hacettepe` fork and a `hukuk` fork all embed with the same
+//! model, so they read the same 450 MB rather than each keeping a copy. Nothing about
+//! retrieval lives on a server — after this step the app is entirely local and works
+//! offline.
+//!
+//! Where updates come from is carried by the DATA: the bundled index's header names its
+//! own `update_url` and `text_base`. The compile-time defaults below are only for an index
+//! built before those fields existed.
 //!
 //! Three rules learned from the shape of the problem:
 //!
@@ -23,8 +29,9 @@ use anyhow::{bail, Context, Result};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-/// Where the model's three files live, relative to the data dir.
-pub const MODEL_DIR: &str = "model";
+/// The environment variable that overrides the shared model cache, for a test or an
+/// operator who keeps models on a particular volume.
+pub const MODELS_DIR_ENV: &str = "CLATCH_MODELS_DIR";
 /// The corpus index, in the data dir.
 pub const INDEX_FILE: &str = "corpus.gtu";
 
@@ -41,25 +48,72 @@ const MODEL_FILES: &[(&str, u64)] = &[
 /// check is the model card itself.
 const MODEL_BASE: &str = "https://huggingface.co/intfloat/multilingual-e5-small/resolve/main";
 
-/// Where a NEWER index comes from when the human asks for one. The depot already ships a
-/// working index (see [`bundled_index`]), so this is never on the first-run path — it is
-/// what makes `gturag sync` able to pick up a corpus GTÜ has revised without anyone
-/// rebuilding or reinstalling the app.
-pub const INDEX_URL: &str = match option_env!("GTURAG_INDEX_URL") {
+/// Fallbacks for an index whose header predates `update_url` / `text_base`. A fork does not
+/// edit these: it builds its index with `--update-url` and `--text-base`, and the data says.
+pub const DEFAULT_INDEX_URL: &str = match option_env!("GTURAG_INDEX_URL") {
     Some(u) => u,
     None => "https://raw.githubusercontent.com/breksos/gturag-clapp/main/corpus.gtu",
 };
-
-/// The committed form database, one JSON file per form. `get` reads a form's full text
-/// from here — the index carries passages, which is what search needs, but an agent asked
-/// to fill a form in wants the whole document.
-pub const FORMS_BASE: &str = match option_env!("GTURAG_FORMS_BASE") {
+pub const DEFAULT_TEXT_BASE: &str = match option_env!("GTURAG_FORMS_BASE") {
     Some(u) => u,
     None => "https://raw.githubusercontent.com/breksos/gturag-clapp/main/forms",
 };
+/// The provenance the builder stamps when `--source` is not given.
+pub const DEFAULT_SOURCE: &str = "https://www.gtu.edu.tr/kategori/2382/0/display.aspx";
 
-pub fn model_dir(cli: &str) -> PathBuf {
-    clappkit::data_subdir(cli, MODEL_DIR)
+/// Where a newer index is fetched from — the index's own word, else the compiled default.
+pub fn update_url(corpus: Option<&Corpus>) -> String {
+    corpus
+        .and_then(|c| c.header.update_url.clone())
+        .unwrap_or_else(|| DEFAULT_INDEX_URL.to_string())
+}
+
+/// Where a document's full text is fetched from.
+pub fn text_base(corpus: Option<&Corpus>) -> String {
+    corpus
+        .and_then(|c| c.header.text_base.clone())
+        .unwrap_or_else(|| DEFAULT_TEXT_BASE.to_string())
+}
+
+/// The machine-wide cache every clapp of this family reads the model from.
+///
+/// `$CLATCH_MODELS_DIR` when set; else the OS cache location — `~/Library/Caches` on
+/// macOS, `%LOCALAPPDATA%` on Windows, `$XDG_CACHE_HOME` or `~/.cache` elsewhere — under
+/// `clatch/models`. Shared on purpose and by construction: the path is keyed by the MODEL
+/// id, not the app, so two apps that embed with the same model cannot end up with two
+/// copies. A model is 450 MB; a family of five clapps is not 2.25 GB.
+pub fn models_root() -> PathBuf {
+    if let Ok(dir) = std::env::var(MODELS_DIR_ENV) {
+        if !dir.is_empty() {
+            return PathBuf::from(dir);
+        }
+    }
+    let base = if cfg!(target_os = "macos") {
+        clappkit::paths::home().map(|h| h.join("Library").join("Caches"))
+    } else if cfg!(windows) {
+        clappkit::paths::user_base()
+    } else {
+        std::env::var("XDG_CACHE_HOME")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .map(PathBuf::from)
+            .or_else(|| clappkit::paths::home().map(|h| h.join(".cache")))
+    };
+    base.unwrap_or_else(std::env::temp_dir).join("clatch").join("models")
+}
+
+/// This model's directory in the shared cache: the model id with `/` made safe for a path.
+pub fn model_dir() -> PathBuf {
+    models_root().join(crate::corpus::MODEL_ID.replace('/', "--"))
+}
+
+/// Adopt a model an older version of this app downloaded into its private data directory,
+/// so upgrading never re-downloads 450 MB. Once: a no-op when the shared copy exists.
+pub fn adopt_private_model(cli: &str) {
+    let legacy = clappkit::data_dir(cli).join("model");
+    if legacy.join("model.safetensors").is_file() {
+        clappkit::paths::adopt_legacy(&legacy, &model_dir());
+    }
 }
 
 pub fn index_path(cli: &str) -> PathBuf {
@@ -68,8 +122,8 @@ pub fn index_path(cli: &str) -> PathBuf {
 
 /// Is the model already on disk and plausibly complete? Cheap enough to call at startup —
 /// it stats three files and never opens the 450 MB one.
-pub fn model_present(cli: &str) -> bool {
-    let dir = model_dir(cli);
+pub fn model_present() -> bool {
+    let dir = model_dir();
     MODEL_FILES.iter().all(|(name, size)| {
         std::fs::metadata(dir.join(name))
             // A truncated download from a killed process would otherwise pass as present
@@ -132,8 +186,8 @@ fn download(url: &str, dest: &Path, expect: u64, mut on_progress: impl FnMut(u8)
 
 /// Fetch the model's three files. `progress` sees 0–100 across the whole set, weighted by
 /// size, so the bar does not jump to 96% and sit there for four minutes.
-pub fn fetch_model(cli: &str, mut progress: impl FnMut(Stage)) -> Result<()> {
-    let dir = model_dir(cli);
+pub fn fetch_model(mut progress: impl FnMut(Stage)) -> Result<()> {
+    let dir = model_dir();
     clappkit::ensure_private_dir(&dir)?;
     let grand_total: u64 = MODEL_FILES.iter().map(|(_, s)| *s).sum();
     let mut completed: u64 = 0;
@@ -157,18 +211,26 @@ pub fn fetch_model(cli: &str, mut progress: impl FnMut(Stage)) -> Result<()> {
     Ok(())
 }
 
-/// Fetch the prebuilt corpus index and return it, parsed.
+/// Fetch the index from `url` and return it parsed — or `None` when what arrived is not
+/// newer than `current_built`, in which case nothing on disk changes.
 ///
 /// Parsed *before* it replaces anything: [`Corpus::from_bytes`] is what tells an HTML 404
 /// page, a truncated transfer and an index built with a different model apart from a good
-/// file, and all three of those arrive looking like a successful download.
-pub fn fetch_index(cli: &str, mut progress: impl FnMut(Stage)) -> Result<Corpus> {
+/// file, and all three of those arrive looking like a successful download. And compared
+/// before it is installed: `sync` is "is there something newer?", and the honest answer
+/// to "no" is to leave the loaded index exactly as it is.
+pub fn fetch_index(
+    cli: &str,
+    url: &str,
+    current_built: Option<&str>,
+    mut progress: impl FnMut(Stage),
+) -> Result<Option<Corpus>> {
     let dest = index_path(cli);
     let staging = dest.with_extension("incoming");
-    download(INDEX_URL, &staging, 16 * 1024 * 1024, |p| {
+    download(url, &staging, 16 * 1024 * 1024, |p| {
         progress(Stage::Downloading { percent: p });
     })
-    .context("downloading the form index")?;
+    .context("downloading the document index")?;
 
     let corpus = match Corpus::read(&staging) {
         Ok(c) => c,
@@ -177,10 +239,17 @@ pub fn fetch_index(cli: &str, mut progress: impl FnMut(Stage)) -> Result<Corpus>
             return Err(e);
         }
     };
+    if let Some(have) = current_built {
+        if corpus.header.built.as_str() <= have {
+            let _ = std::fs::remove_file(&staging);
+            progress(Stage::Ready);
+            return Ok(None);
+        }
+    }
     std::fs::rename(&staging, &dest)
         .with_context(|| format!("cannot install the index at {}", dest.display()))?;
     progress(Stage::Ready);
-    Ok(corpus)
+    Ok(Some(corpus))
 }
 
 /// One form's full extracted text, from the committed database. Cached in the app's data
@@ -189,7 +258,7 @@ pub fn fetch_index(cli: &str, mut progress: impl FnMut(Stage)) -> Result<Corpus>
 /// This is what `get` answers with. The app deliberately does NOT download the original
 /// `.docx`/`.pdf`: the human is sent to the university's own page for that (the
 /// authoritative copy, always current), while an agent gets text it can actually read.
-pub fn fetch_form_text(cli: &str, id: &str) -> Result<String> {
+pub fn fetch_form_text(cli: &str, text_base: &str, id: &str) -> Result<String> {
     // `id` comes from our own index, never from the caller, but it lands in a URL and a
     // path — so it is still constrained to what an id can legitimately contain.
     let safe: String = id
@@ -203,7 +272,7 @@ pub fn fetch_form_text(cli: &str, id: &str) -> Result<String> {
     let dir = clappkit::data_subdir(cli, "forms");
     let dest = dir.join(format!("{safe}.json"));
     if !dest.is_file() {
-        download(&format!("{FORMS_BASE}/{safe}.json"), &dest, 4096, |_| {})
+        download(&format!("{text_base}/{safe}.json"), &dest, 4096, |_| {})
             .with_context(|| format!("fetching the text of {safe}"))?;
     }
 
@@ -302,17 +371,35 @@ mod tests {
         assert!(!(older > older.clone()));
     }
 
+    /// One model per machine, not per app: the cache is keyed by the model id and by
+    /// nothing about the app, so a fork resolves to the very same directory.
     #[test]
-    fn a_missing_model_is_not_reported_as_present() {
-        let _g = std::env::temp_dir();
-        assert!(!model_present("gturag-test-absent-model"));
+    fn the_model_cache_is_shared_and_keyed_by_model_not_app() {
+        let dir = model_dir();
+        assert!(dir.ends_with("intfloat--multilingual-e5-small"), "{}", dir.display());
+        assert!(dir.to_string_lossy().contains("clatch"), "{}", dir.display());
+        assert!(!dir.to_string_lossy().contains("gturag"), "an app name in a shared path: {}", dir.display());
     }
 
     #[test]
-    fn the_index_url_is_overridable_at_build_time() {
-        // A fork must be able to point at its own release without editing code.
-        assert!(INDEX_URL.starts_with("https://"), "{INDEX_URL}");
-        assert!(INDEX_URL.ends_with(".gtu"), "{INDEX_URL}");
+    fn the_index_url_comes_from_the_data_first() {
+        use crate::corpus::{Header, Corpus};
+        let mut c = Corpus {
+            header: Header {
+                version: 1, model: crate::corpus::MODEL_ID.into(), dim: 1,
+                built: "2026-09-02".into(), source: "s".into(),
+                update_url: Some("https://fork.example/corpus.gtu".into()),
+                text_base: Some("https://fork.example/docs".into()),
+                default_family: None, docs: vec![], chunks: vec![],
+            },
+            vectors: vec![],
+        };
+        assert_eq!(update_url(Some(&c)), "https://fork.example/corpus.gtu");
+        assert_eq!(text_base(Some(&c)), "https://fork.example/docs");
+        c.header.update_url = None;
+        assert_eq!(update_url(Some(&c)), DEFAULT_INDEX_URL, "an old header falls back");
+        assert_eq!(update_url(None), DEFAULT_INDEX_URL);
+        assert!(DEFAULT_INDEX_URL.ends_with(".gtu"));
     }
 
     #[test]

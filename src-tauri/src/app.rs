@@ -75,11 +75,12 @@ impl Core {
             let target = {
                 let s = self.state.lock().await;
                 s.corpus().and_then(|c| {
-                    crate::index::resolve(c, &arg("id")).map(|(_, d)| (d.id.clone(), d.url.clone()))
+                    crate::index::resolve(c, &arg("id"))
+                        .map(|(_, d)| (d.id.clone(), d.url.clone(), provision::text_base(Some(c))))
                 })
             };
             Some(match target {
-                Some((id, url)) => provision::fetch_form_text(CLI, &id)
+                Some((id, url, base)) => provision::fetch_form_text(CLI, &base, &id)
                     .map(|text| (text, url))
                     .map_err(|e| e.to_string()),
                 None => Err(format!("no form matches `{}`", arg("id"))),
@@ -309,37 +310,47 @@ fn spawn_provisioning(core: Arc<Core>, app: tauri::AppHandle, force: bool) {
 
         let worker = tokio::task::spawn_blocking(move || {
             // The index first: it is small, and a lexical search working within seconds
-            // beats a blank window that is technically busy.
-            let cached = if force { None } else { provision::load_cached_index(CLI) };
-            match cached {
-                Some(c) => {
-                    let _ = tx.send(Prov::IndexReady(Box::new(c)));
-                }
-                None => {
-                    let progress = tx.clone();
-                    match provision::fetch_index(CLI, move |st| {
-                        let _ = progress.send(Prov::IndexStage(st));
-                    }) {
-                        Ok(c) => {
-                            let _ = tx.send(Prov::IndexReady(Box::new(c)));
-                        }
-                        Err(e) => {
-                            let _ = tx.send(Prov::IndexStage(Stage::Failed { reason: e.to_string() }));
-                        }
+            // beats a blank window that is technically busy. The best local copy loads
+            // unconditionally; `sync` (force) then asks the index's own update URL for
+            // something newer and installs it only if it IS newer.
+            let local = provision::load_cached_index(CLI);
+            let (url, have) = (
+                provision::update_url(local.as_ref()),
+                local.as_ref().map(|c| c.header.built.clone()),
+            );
+            if let Some(c) = local {
+                let _ = tx.send(Prov::IndexReady(Box::new(c)));
+            }
+            if force || have.is_none() {
+                let progress = tx.clone();
+                match provision::fetch_index(CLI, &url, have.as_deref(), move |st| {
+                    let _ = progress.send(Prov::IndexStage(st));
+                }) {
+                    Ok(Some(c)) => {
+                        let _ = tx.send(Prov::IndexReady(Box::new(c)));
+                    }
+                    Ok(None) => {
+                        eprintln!("{CLI}: the index is already current ({})", have.as_deref().unwrap_or("?"));
+                        let _ = tx.send(Prov::IndexStage(Stage::Ready));
+                    }
+                    Err(e) => {
+                        let _ = tx.send(Prov::IndexStage(Stage::Failed { reason: e.to_string() }));
                     }
                 }
             }
 
-            // Then the model — 450 MB, so it is deliberately last.
-            let fetched = if provision::model_present(CLI) {
+            // Then the model — 450 MB, so it is deliberately last, and shared: adopt a copy
+            // an older version kept privately, then download only if the machine has none.
+            provision::adopt_private_model(CLI);
+            let fetched = if provision::model_present() {
                 Ok(())
             } else {
                 let progress = tx.clone();
-                provision::fetch_model(CLI, move |st| {
+                provision::fetch_model(move |st| {
                     let _ = progress.send(Prov::ModelStage(st));
                 })
             };
-            match fetched.and_then(|_| crate::embed::Embedder::load(&provision::model_dir(CLI))) {
+            match fetched.and_then(|_| crate::embed::Embedder::load(&provision::model_dir())) {
                 Ok(e) => {
                     let _ = tx.send(Prov::ModelReady(Box::new(e)));
                 }
