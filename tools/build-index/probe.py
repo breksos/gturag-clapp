@@ -23,33 +23,10 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 WORK = HERE / "work"
-BASE = "https://www.gtu.edu.tr/fileman/Files/UserFiles/kalite"
-UA = {"User-Agent": "Mozilla/5.0 (compatible; gturag-index/0.2)"}
 
-# Register sheet → CDN folder candidates, most likely first. Confirmed folders are probed
-# first; the rest are best guesses that the discovery stage validates or rules out.
-FOLDERS = {
-    "Organizasyon Şeması": ["Organizasyon Şeması", "Organizasyon Semasi"],
-    "Kaplumbaga Şemaları": ["Kaplumbağa Şemaları", "Kaplumbaga Şemaları", "Kaplumbaga Semalari"],
-    "SPİKler": ["SPİK", "SPİKler", "SPIK"],
-    "Risk Analizleri": ["Risk Analizleri"],
-    "Listeler": ["Listeler"],
-    "Politikalar": ["Politikalar"],
-    "Görev Tanımları": ["Görev Tanımları", "Gorev Tanimlari"],
-    "İş Akışları": ["İş Akışları", "İş Akış Şemaları", "Is Akislari"],
-    "Yönergeler": ["Yönergeler"],
-    "Yönetmelikler": ["Yönetmelikler"],
-    "Prosedürler": ["Prosedürler"],
-    "El Kitapları": ["El Kitapları", "El Kitaplari"],
-    "Sistem Talimatları": ["Sistem Talimatları", "Talimatlar"],
-    "Kılavuzlar": ["Kılavuzlar", "Kilavuzlar"],
-    "İSG Talimatları": ["İSG Talimatları", "İSG Talimatlar", "ISG Talimatlari"],
-    "Laboratuvar Talimatları": ["Laboratuvar Talimatları", "Laboratuvar Talimatlari"],
-    "Cihaz Kullanım Talimatları": ["Cihaz Kullanım Talimatları", "Cihaz Kullanma Talimatları"],
-    "Anketler": ["Anketler"],
-    "Planlar": ["Planlar"],
-}
-EXTS = ["pdf", "docx", "xlsx", "doc", "xls"]
+# The source's shape — CDN root, family folders, extensions — lives in source.py,
+# so pointing this pipeline at a different registry never means editing this file.
+from source import CDN_BASE as BASE, CDN_EXTS as EXTS, CDN_FOLDERS as FOLDERS, UA
 
 
 def head(url: str) -> int:
