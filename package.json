@@ -11,7 +11,8 @@
     "build": "tauri build",
     "pack": "bash scripts/package.sh",
     "verify": "bash scripts/verify.sh",
-    "index": "python tools/build-index/fetch.py"
+    "index": "python tools/build-index/fetch.py",
+    "corpus": "bash scripts/corpus.sh"
   },
   "dependencies": {
     "react": "^18.3.1",

@@ -22,8 +22,9 @@ the agent, and both calling the same methods so they cannot drift. What you open
 rides along on your next prompt; what the agent searches for fills your screen.
 
 **The app retrieves; the agent answers.** No language model ships here and none runs on a
-server. The only model involved is a sentence embedder, and it is downloaded to your own
-machine on first run — after that, retrieval is entirely local and works offline.
+server. The only model involved is a sentence embedder, downloaded once per machine into a
+cache every clapp of this family shares — after that, retrieval is entirely local and works
+offline.
 
 Retrieval is hybrid, in this order:
 
@@ -110,37 +111,56 @@ forward deliberately.
 > SSH; if you are looking for `vendor/clatch` or `scripts/with-clatch-deps.sh` from an older
 > checkout, they are gone and nothing replaced them.)
 
-## Rebuilding the corpus
+## Updating the corpus — after publishing, without a release
 
-Two stages, deliberately split.
-
-**Stage 1 — refresh the database.** Python, because prying text out of pre-2007 Office
-files means driving LibreOffice, and that never ships:
+The corpus is a database, not a release artifact. After the app is published, the loop is:
 
 ```sh
-python tools/build-index/fetch.py       # scrape → cull → extract → forms/*.json
+python tools/build-index/fetch.py    # stage 1: refresh forms/ from every source
+npm run corpus                       # stage 2: re-index — only what changed is embedded
+git commit -am "…" && git push       # every installed app picks it up with `gturag sync`
 ```
 
-It keeps a document if it lives under the quality office's tree, and keeps only the highest
-revision of each form; anything the page no longer lists is **deleted** from `forms/`, so a
-withdrawn form stops being searchable. It reports what it culled and why, and says so
-loudly when LibreOffice is absent rather than silently indexing 153 documents by title
-alone. Commit the diff — that is the corpus update.
+**Stage 1** is Python, because prying text out of pre-2007 Office files means driving
+LibreOffice, and that never ships. It lists every source page, proves the register's
+unlisted documents on the CDN, downloads, extracts and culls — and keeps a document's text
+when the university's own link to that revision breaks. `tools/build-index/README.md` maps
+the stages; everything source-specific lives in `tools/build-index/source.py`.
 
-**Stage 2 — rebuild the index.** The app's own binary, because it must embed passages with
-**the same code that embeds queries**; a separate implementation would agree until it
-quietly didn't, and that failure is invisible:
+**Stage 2** is the app's own binary, because passages must be embedded by the same code that
+embeds queries — a separate implementation would agree until it quietly didn't, and that
+failure is invisible. It is **incremental**: every document in `corpus.gtu` carries a
+fingerprint of what was embedded, so a rebuild reuses the vectors of every unchanged
+document and embeds only the rest. Adding one document to 1850 embeds one document;
+removing one embeds nothing, and needs no model at all. `--fresh` embeds everything again;
+`--built` is an input, not the clock, so two builds over the same database are
+byte-identical.
 
-```sh
-gturag index-corpus forms --model <dir> --built 2026-08-13 --out corpus.gtu
-```
+The index carries its own `update_url` and `text_base`, so the app never has to be told
+where updates live — the data says. `gturag sync` fetches that URL and installs what
+arrives only if it is newer than what is loaded.
 
-Chunking happens here rather than in the scraper, so passage policy can change without
-re-scraping 1850 documents or needing LibreOffice again. `--built` is an input, not the
-clock, so two runs over the same database produce byte-identical output.
+## One engine, many registries
 
-Users pick the new corpus up with `gturag sync`, which fetches `corpus.gtu` from the
-default branch — **no release required** to update the forms.
+Nothing GTÜ-specific is compiled into the engine. The app's identity comes from
+`clatch.json` (read by `build.rs`), the scraper's knowledge of the site lives in
+`tools/build-index/source.py`, and the index tells the app where its updates and document
+texts are. To make `hacettepe-clapp`, or a `hukuk-clapp` over a statute book:
+
+1. Fork. Edit `clatch.json`: `id`, `name`, `connector.cli`, `about`.
+2. Replace `assets/gtu-emblem-source.webp` with the new mark and run `scripts/emblem.py`
+   then `scripts/icon.py`; redraw `scripts/banner.py`'s motif if you like.
+3. Point `tools/build-index/source.py` at the new source: listing pages, code grammar, CDN
+   folders, register columns. Run stage 1.
+4. Build the index once with its addresses:
+   `gturag index-corpus forms --built <date> --model <dir> --update-url <raw corpus.gtu URL> --text-base <raw forms/ URL>`.
+   Every later `npm run corpus` carries them forward.
+5. `npm run verify`, tag, release.
+
+The retrieval code learns every code family from the corpus it loads — `FR`, `YÖ`, or a
+statute book's `KHK` — and what a bare number means is the corpus's most common family,
+stamped in the header. The one language-specific piece, Turkish `İ`/`ı` folding and
+5-character stemming in `index.rs`, is a property of the documents, not of the site.
 
 ## Releasing
 
