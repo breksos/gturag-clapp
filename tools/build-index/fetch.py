@@ -422,6 +422,16 @@ def main() -> int:
             body = clean(extract(path, rec["ext"], converter))
         else:
             failures.append({"id": did, "name": rec["name"], "error": rec.get("error")})
+            # The page lists this document but its file 404s — the university's own link
+            # is broken. If the database already holds text for the SAME revision, keep
+            # it: a broken link must not erase text we extracted from that very revision.
+            # A different revision is not kept — that text would be silently wrong.
+            stale = FORMS / f"{did}.json"
+            if stale.is_file():
+                prev = json.loads(stale.read_text(encoding="utf-8"))
+                if prev.get("text") and prev.get("rev") == rec["rev"]:
+                    body = prev["text"]
+                    failures[-1]["kept_previous_text"] = True
 
         write_form(rec, did, body)
         written.add(f"{did}.json")
