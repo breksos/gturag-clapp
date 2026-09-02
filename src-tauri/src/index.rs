@@ -280,7 +280,11 @@ fn code_prefix(key: &str) -> String {
 /// [`Index::build`], derived on the fly in [`resolve`]) — not a hardcoded list. That is
 /// what lets `yılı 2023` pass through as words while `yö 80` is decisively a code: the
 /// difference between them is not their shape, it is that one names a family that exists.
-pub fn find_code(query: &str, prefixes: &std::collections::HashSet<String>) -> Option<String> {
+pub fn find_code(
+    query: &str,
+    prefixes: &std::collections::HashSet<String>,
+    default_family: &str,
+) -> Option<String> {
     let b: Vec<char> = tr_fold(query).chars().collect();
     let is_sep = |c: char| c == '-' || c == '_' || c == ' ';
     let mut i = 0;
@@ -327,11 +331,14 @@ pub fn find_code(query: &str, prefixes: &std::collections::HashSet<String>) -> O
         i = j;
     }
     // A bare number, but only if the query is essentially just that number — "2 nüsha"
-    // must not be read as FR-0002. Forms are what people cite by bare number.
+    // must not be read as FR-0002 — and only when the corpus has said which family a bare
+    // number means. It is FR in a forms registry; the index does not assume.
     let t = tr_fold(query);
     let t = t.trim();
-    if t.len() >= 2 && t.len() <= 4 && t.chars().all(|c| c.is_ascii_digit()) {
-        return Some(format!("fr-{:04}", t.parse::<u32>().ok()?));
+    if !default_family.is_empty()
+        && t.len() >= 2 && t.len() <= 4 && t.chars().all(|c| c.is_ascii_digit())
+    {
+        return Some(format!("{default_family}-{:04}", t.parse::<u32>().ok()?));
     }
     None
 }
@@ -482,6 +489,9 @@ pub struct Index {
     /// The letter-prefixes of every code in the corpus (`fr`, `yö`, `isg-tl`, …), folded.
     /// [`find_code`] trusts only these, so free text cannot invent a family.
     prefixes: std::collections::HashSet<String>,
+    /// What a bare number means — the corpus header's `default_family`, or its most common
+    /// family when the header predates the field. Empty when the corpus carries no codes.
+    default_family: String,
 }
 
 impl Index {
@@ -505,6 +515,7 @@ impl Index {
             body: Field::build(corpus.chunks().iter().map(|c| c.text.as_str())),
             title: Field::build(titles.iter().map(String::as_str)),
             prefixes: corpus_prefixes(corpus),
+            default_family: default_family(corpus),
         }
     }
 
@@ -527,7 +538,7 @@ impl Index {
         let mut placed: HashMap<usize, usize> = HashMap::new(); // doc → index into hits
 
         // 1. An exact code wins outright.
-        let code = find_code(query, &self.prefixes);
+        let code = find_code(query, &self.prefixes, &self.default_family);
         if let Some(code) = &code {
             for (i, d) in corpus.docs().iter().enumerate() {
                 if d.code.as_deref().map(code_key).as_deref() == Some(code.as_str()) {
@@ -713,6 +724,26 @@ fn corpus_prefixes(corpus: &Corpus) -> std::collections::HashSet<String> {
         .collect()
 }
 
+/// The family a bare number resolves to. The header says so when the builder wrote it;
+/// an older index falls back to the most common family, which is what a person citing a
+/// bare number in that corpus almost certainly means. Folded, like every code key.
+pub fn default_family(corpus: &Corpus) -> String {
+    if let Some(f) = corpus.header.default_family.as_deref() {
+        return tr_fold(f);
+    }
+    let mut counts: HashMap<String, usize> = HashMap::new();
+    for d in corpus.docs() {
+        if let Some(c) = d.code.as_deref() {
+            *counts.entry(code_prefix(&code_key(c))).or_default() += 1;
+        }
+    }
+    counts
+        .into_iter()
+        .max_by(|a, b| a.1.cmp(&b.1).then_with(|| b.0.cmp(&a.0)))
+        .map(|(k, _)| k)
+        .unwrap_or_default()
+}
+
 /// The index of a document's first chunk — the snippet to show when a document was matched
 /// on its title rather than on any particular passage.
 fn first_chunk_of(corpus: &Corpus, doc: usize) -> usize {
@@ -739,7 +770,7 @@ pub fn resolve<'a>(corpus: &'a Corpus, needle: &str) -> Option<(usize, &'a Doc)>
     if let Some((i, d)) = corpus.docs().iter().enumerate().find(|(_, d)| d.id == n) {
         return Some((i, d));
     }
-    let code = find_code(n, &corpus_prefixes(corpus))?;
+    let code = find_code(n, &corpus_prefixes(corpus), &default_family(corpus))?;
     // Prefer Turkish when a code exists in both languages: it is the primary corpus.
     let mut best: Option<(usize, &Doc)> = None;
     for (i, d) in corpus.docs().iter().enumerate() {
@@ -769,6 +800,7 @@ mod tests {
             ext: "docx".into(),
             url: "https://example.invalid".into(),
             chars: 10,
+            hash: None,
         }
     }
 
@@ -791,6 +823,9 @@ mod tests {
                 dim: 3,
                 built: "2026-08-12".into(),
                 source: "x".into(),
+                update_url: None,
+                text_base: None,
+                default_family: None,
                 docs,
                 chunks,
             },
@@ -816,9 +851,9 @@ mod tests {
     fn form_codes_are_recognised_however_they_are_typed() {
         let p = prefixes(&["fr"]);
         for q in ["FR-0083", "fr 0083", "FR_83", "fr83", "form FR-0083 nerede"] {
-            assert_eq!(find_code(q, &p).as_deref(), Some("fr-0083"), "{q}");
+            assert_eq!(find_code(q, &p, "fr").as_deref(), Some("fr-0083"), "{q}");
         }
-        assert_eq!(find_code("0083", &p).as_deref(), Some("fr-0083"));
+        assert_eq!(find_code("0083", &p, "fr").as_deref(), Some("fr-0083"));
     }
 
     /// The register's families carry Turkish capitals and compound prefixes — the exact
@@ -826,14 +861,14 @@ mod tests {
     #[test]
     fn register_codes_are_recognised_turkish_letters_and_all() {
         let p = prefixes(&["fr", "yö", "ia", "isg-tl", "yn"]);
-        assert_eq!(find_code("YÖ-0080", &p).as_deref(), Some("yö-0080"));
-        assert_eq!(find_code("yö 80", &p).as_deref(), Some("yö-0080"));
-        assert_eq!(find_code("İA-0452 nerede", &p).as_deref(), Some("ia-0452"));
-        assert_eq!(find_code("İSG-TL-0001", &p).as_deref(), Some("isg-tl-0001"));
+        assert_eq!(find_code("YÖ-0080", &p, "fr").as_deref(), Some("yö-0080"));
+        assert_eq!(find_code("yö 80", &p, "fr").as_deref(), Some("yö-0080"));
+        assert_eq!(find_code("İA-0452 nerede", &p, "fr").as_deref(), Some("ia-0452"));
+        assert_eq!(find_code("İSG-TL-0001", &p, "fr").as_deref(), Some("isg-tl-0001"));
         // A single digit stays words — the same guard that keeps `PROJEFR-1` out.
-        assert_eq!(find_code("isg tl 1 talimatı", &p), None);
-        assert_eq!(find_code("isg tl 01 talimatı", &p).as_deref(), Some("isg-tl-0001"));
-        assert_eq!(find_code("YN-0001 yönetmeliği", &p).as_deref(), Some("yn-0001"));
+        assert_eq!(find_code("isg tl 1 talimatı", &p, "fr"), None);
+        assert_eq!(find_code("isg tl 01 talimatı", &p, "fr").as_deref(), Some("isg-tl-0001"));
+        assert_eq!(find_code("YN-0001 yönetmeliği", &p, "fr").as_deref(), Some("yn-0001"));
     }
 
     /// A bare number inside a longer question is the one way of naming a document that
@@ -848,7 +883,7 @@ mod tests {
         let c = corpus();
         let idx = Index::build(&c);
         // Not a code as far as `find_code` is concerned...
-        assert_eq!(find_code("0083 formu nerede", &idx.prefixes), None);
+        assert_eq!(find_code("0083 formu nerede", &idx.prefixes, &idx.default_family), None);
         // ...so this hit can only have come from the title field carrying the code.
         let hits = idx.search(&c, "0083 formu nerede", None, Sort::Relevance, 5);
         assert_eq!(
@@ -872,16 +907,31 @@ mod tests {
         );
     }
 
+    /// "0083" means FR-0083 in a forms registry and nothing at all in a corpus that never
+    /// said. The family is data, not a constant, or a statute-book fork would answer every
+    /// bare number with a form that does not exist.
+    #[test]
+    fn a_bare_number_takes_the_family_the_corpus_declares() {
+        let p = prefixes(&["fr", "yö"]);
+        assert_eq!(find_code("0083", &p, "yö").as_deref(), Some("yö-0083"));
+        assert_eq!(find_code("0083", &p, ""), None, "no declared family, no guess");
+        // Declared in the header, it wins; undeclared, the most common family stands in.
+        let mut c = corpus();
+        assert_eq!(default_family(&c), "fr");
+        c.header.default_family = Some("YÖ".into());
+        assert_eq!(default_family(&c), "yö", "folded like every code key");
+    }
+
     #[test]
     fn ordinary_words_are_not_mistaken_for_codes() {
         let p = prefixes(&["fr", "yö", "tl"]);
         // The over-eager cases: a bare number inside a sentence, a word that happens to
         // end before digits, and a letter-run that is not a family the corpus contains.
-        assert_eq!(find_code("2 nüsha halinde doldurulacak", &p), None);
-        assert_eq!(find_code("staj belgesi", &p), None);
-        assert_eq!(find_code("PROJEFR-1", &p), None);
-        assert_eq!(find_code("yılı 2023 raporu", &p), None, "an unknown family is words");
-        assert_eq!(find_code("no 15", &p), None);
+        assert_eq!(find_code("2 nüsha halinde doldurulacak", &p, "fr"), None);
+        assert_eq!(find_code("staj belgesi", &p, "fr"), None);
+        assert_eq!(find_code("PROJEFR-1", &p, "fr"), None);
+        assert_eq!(find_code("yılı 2023 raporu", &p, "fr"), None, "an unknown family is words");
+        assert_eq!(find_code("no 15", &p, "fr"), None);
     }
 
     #[test]

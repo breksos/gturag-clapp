@@ -1,4 +1,4 @@
-//! GTÜ Formlar — one binary, two roles over one state.
+//! One binary, two roles over one state — and one engine, rebranded per registry.
 //!
 //! `gturag app` is the window Clatch launches; `gturag <verb>` is the agent's CLI.
 //! [`clappkit::role::main_dispatch`] decides which at startup, which is why this file is
@@ -19,12 +19,14 @@ mod index;
 mod provision;
 mod state;
 
-/// Must equal `clatch.json`'s `id`; `bootstrap` hard-errors on a mismatch. A test in
-/// `cli.rs` reads the real manifest and asserts these agree, so the two cannot drift.
-const APP_ID: &str = "com.breksos.gturag";
+/// The app's identity, read from `clatch.json` by `build.rs`. Not constants: a fork of
+/// this engine changes the manifest and rebuilds, and nothing here has to know.
+const APP_ID: &str = env!("CLAPP_ID");
 /// The CLI shorthand — `connector.cli`. It keys the IPC address and prefixes every fatal
-/// error, so it reads like the rest of what the agent sees: `gturag: <what went wrong>`.
-const CLI: &str = "gturag";
+/// error, so it reads like the rest of what the agent sees: `<cli>: <what went wrong>`.
+const CLI: &str = env!("CLAPP_CLI");
+/// The display name, for the window's wordmark and the snapshot.
+const APP_NAME: &str = env!("CLAPP_NAME");
 
 fn main() {
     // Windows draws this window with the Edge WebView2 Runtime, which is not part of the

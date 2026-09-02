@@ -70,11 +70,13 @@ const BASE: Snapshot = {
   open: RESULTS[0],
   saved: [RESULTS[2]],
   provision: { model: { stage: "ready" }, index: { stage: "ready" }, ready: true, summary: "ready" },
+  app: { name: "GTÜ Formlar" },
   corpus: {
     documents: 791,
     chunks: 2338,
     built: "2026-08-12",
     source: "https://www.gtu.edu.tr/kategori/2382/0/display.aspx",
+    updateUrl: null,
   },
   agents: AGENTS,
 };

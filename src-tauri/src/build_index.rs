@@ -134,6 +134,7 @@ pub fn run(forms_dir: &Path, model: &Path, out: &Path, source: &str, built: &str
             ext: f.ext.clone(),
             url: f.url.clone(),
             chars: f.text.chars().count() as u64,
+            hash: None,
         });
     }
     println!("  {} passages", chunks.len());
@@ -164,6 +165,9 @@ pub fn run(forms_dir: &Path, model: &Path, out: &Path, source: &str, built: &str
             dim: DIM as u32,
             built: built.to_string(),
             source: source.to_string(),
+            update_url: None,
+            text_base: None,
+            default_family: None,
             docs,
             chunks,
         },

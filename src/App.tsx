@@ -1,4 +1,4 @@
-// The window: a search bar, what it found, and WHERE in each form it was found.
+// The window: a search bar, what it found, and WHERE in each document it was found.
 //
 // Not a second chat surface — the agent handles conversation, and Clatch carries it. There
 // is deliberately no "ask the agent" button: a clapp's window is for the human's own
@@ -52,10 +52,10 @@ export default function App() {
         <div className="brand">
           <Emblem />
           <div className="brandtext">
-            <span className="wordmark">GTÜ Formlar</span>
+            <span className="wordmark">{state.app.name}</span>
             {state.corpus && (
               <span className="corpus">
-                {state.corpus.documents} form · {state.corpus.chunks} pasaj ·{" "}
+                {state.corpus.documents} doküman · {state.corpus.chunks} pasaj ·{" "}
                 {state.corpus.built}
               </span>
             )}
@@ -251,7 +251,7 @@ function Detail({
     return (
       <div className="detail-empty">
         <Emblem size={40} muted />
-        <p>Bir form seçin.</p>
+        <p>Bir doküman seçin.</p>
       </div>
     );
   }
@@ -403,7 +403,7 @@ function Provisioning({ state, onRetry }: { state: Snapshot; onRetry: () => void
 function Strip({ state }: { state: Snapshot }) {
   return (
     <div className="strip">
-      <span className="strip-title">{state.title || "GTÜ Formlar"}</span>
+      <span className="strip-title">{state.title || state.app.name}</span>
       {!state.query && !state.open && (
         <span className="strip-count">aramak için yazın</span>
       )}
@@ -450,11 +450,11 @@ function Empty({ state }: { state: Snapshot }) {
     return (
       <div className="empty">
         <Emblem size={72} />
-        <p>Üniversitenin bütün formları, tek aramada.</p>
+        <p>Bütün dokümanlar, tek aramada.</p>
         <p className="hint">
-          Formun adını bilmenize gerek yok — ne yapmak istediğinizi yazın. Numarasını
-          biliyorsanız (<code>FR-0083</code>) doğrudan onu yazın. Ajanınız da buradan
-          arayabilir; ikinizin bulduğu da bu ekranda görünür.
+          Dokümanın adını bilmenize gerek yok — ne yapmak istediğinizi yazın. Kodunu
+          biliyorsanız doğrudan onu yazın. Ajanınız da buradan arayabilir; ikinizin
+          bulduğu da bu ekranda görünür.
         </p>
       </div>
     );
@@ -462,7 +462,7 @@ function Empty({ state }: { state: Snapshot }) {
   return (
     <div className="empty">
       <p>“{state.query}” için sonuç yok.</p>
-      <p className="hint">Başka kelimelerle deneyin, ya da form numarasıyla arayın.</p>
+      <p className="hint">Başka kelimelerle deneyin, ya da doküman koduyla arayın.</p>
     </div>
   );
 }

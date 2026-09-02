@@ -52,9 +52,10 @@ THE APP
   close                    Quit the app.
 
 NOTES
-  Retrieval runs entirely on this machine. On first run the app downloads the embedding
-  model (~450 MB) and the prebuilt index into its own data directory; until the model
-  lands, search still answers — lexically. `status` says which state it is in.
+  Retrieval runs entirely on this machine. The index ships inside the app; on first run
+  the app downloads the embedding model (~450 MB) into a cache shared by every clapp of
+  this family, so a second app never downloads it again. Until the model lands, search
+  still answers — lexically. `status` says which state it is in.
 
   The corpus is every form on the university's quality-office Formlar page, kept at its
   current revision. A form indexed by title alone (a pre-2007 .doc with no extractable
@@ -260,7 +261,7 @@ pub async fn run(args: Vec<String>) -> ! {
             println!("index    {}", field(p, "summary"));
             if let Some(c) = reply["corpus"].as_object() {
                 println!(
-                    "corpus   {} forms, {} passages, built {}",
+                    "corpus   {} documents, {} passages, built {}",
                     c["documents"], c["chunks"], c["built"].as_str().unwrap_or("?")
                 );
             }
@@ -405,11 +406,14 @@ mod tests {
         }
     }
 
+    /// build.rs reads these out of the manifest, so they cannot drift — this pins that
+    /// build.rs read the RIGHT manifest, which is the one thing left to get wrong.
     #[test]
-    fn the_cli_name_matches_the_manifest() {
+    fn the_identity_is_the_manifests() {
         let m: Value = serde_json::from_str(include_str!("../../clatch.json")).unwrap();
         assert_eq!(m["connector"]["cli"].as_str(), Some(CLI));
         assert_eq!(m["id"].as_str(), Some(crate::APP_ID));
+        assert_eq!(m["name"].as_str(), Some(crate::APP_NAME));
     }
 
     #[test]
