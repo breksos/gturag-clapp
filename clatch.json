@@ -14,6 +14,7 @@
   "publisher": "breksos",
   "protocol": 2,
   "icon": "assets/icon.png",
+  "banner": "assets/banner.png",
   "launch": {
     "macos": "bin/gturag",
     "windows": "bin/gturag.exe",
