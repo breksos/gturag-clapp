@@ -42,7 +42,12 @@ while [ $# -gt 0 ]; do
         *) ARGS+=("$1"); shift ;;
     esac
 done
-ARGS+=(--built "${BUILT:-$(date +%F)}")
+# A TIMESTAMP, not a bare date. `sync` installs an index only when its `built` is greater
+# than the loaded one, so two rebuilds on one calendar day used to be indistinguishable and
+# the second never reached anyone who had already synced that morning. ISO-8601 sorts as a
+# string either way, and "2026-09-02T14:05:00Z" > "2026-09-02", so a date-only index from
+# before this change is still correctly seen as older.
+ARGS+=(--built "${BUILT:-$(date -u +%FT%TZ)}")
 # Only offered when present: a build that embeds nothing must not fail for want of a model
 # it would never load, and one that must embed says so itself.
 [ -n "$MODEL" ] && ARGS+=(--model "$MODEL")

@@ -7,7 +7,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Emblem } from "./Emblem";
 import {
-  useApp, useAsset, prefetchAssets, agentTint, isMatch, fold, nameOf,
+  useApp, useAsset, prefetchAssets, agentTint, isMatch, fold, nameOf, builtOn,
   openUrl, viewUrl, usesViewer,
   percentOf, type Doc, type Agent, type Activity, type Snapshot,
 } from "./bridge";
@@ -56,7 +56,7 @@ export default function App() {
             {state.corpus && (
               <span className="corpus">
                 {state.corpus.documents} doküman · {state.corpus.chunks} pasaj ·{" "}
-                {state.corpus.built}
+                {builtOn(state.corpus.built)}
               </span>
             )}
           </div>
@@ -341,7 +341,7 @@ function SyncButton({ state, onSync }: { state: Snapshot; onSync: () => void }) 
       disabled={busy}
       title={
         state.corpus
-          ? `Form dizinini güncelle — şu anki sürüm ${state.corpus.built}`
+          ? `Form dizinini güncelle — şu anki sürüm ${builtOn(state.corpus.built)}`
           : "Form dizinini indir"
       }
     >
@@ -508,7 +508,7 @@ function Feed({ state }: { state: Snapshot }) {
         rows.map((a) => <FeedRow key={a.seq} item={a} agents={state.agents} />)
       )}
       {state.corpus && (
-        <p className="feed-built">Dizin sürümü: {state.corpus.built}</p>
+        <p className="feed-built">Dizin sürümü: {builtOn(state.corpus.built)}</p>
       )}
     </div>
   );

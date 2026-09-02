@@ -151,6 +151,12 @@ export function fold(s: string): string {
 }
 
 /** Does this word count as a match for one of the index's terms? */
+/** The index version as a human reads it. `built` carries a full ISO timestamp so two
+ *  rebuilds on one day are distinguishable to `sync`; a person only wants the day. */
+export function builtOn(built: string): string {
+  return built.split("T")[0];
+}
+
 export function isMatch(word: string, terms: string[]): boolean {
   const w = fold(word);
   return terms.some((t) => w === t || (t.length >= STEM_LEN && w.startsWith(t)));
