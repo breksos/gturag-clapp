@@ -403,6 +403,9 @@ impl AppState {
 
         json!({
             "ok": true,
+            // The app's own name, from the manifest via build.rs — so the window's wordmark
+            // and the CLI's banner are the same string a fork changes in one place.
+            "app": { "name": crate::APP_NAME },
             "query": self.query,
             "title": title,
             "searching": self.searching,
@@ -429,6 +432,7 @@ impl AppState {
                 "chunks": c.chunks().len(),
                 "built": c.header.built,
                 "source": c.header.source,
+                "updateUrl": c.header.update_url,
             })),
             "agents": self.agents,
             // Who did what, newest last. Each row carries the resolved name as well as the
@@ -460,6 +464,7 @@ mod tests {
             ext: "docx".into(),
             url: format!("https://example.invalid/{code}.docx"),
             chars,
+            hash: None,
         }
     }
 
@@ -479,6 +484,9 @@ mod tests {
                 dim: 2,
                 built: "2026-08-12".into(),
                 source: "https://example.invalid".into(),
+                update_url: None,
+                text_base: None,
+                default_family: None,
                 docs,
                 chunks,
             },

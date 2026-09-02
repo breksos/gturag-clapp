@@ -46,6 +46,12 @@ pub struct Doc {
     /// Characters of body text extracted. Zero means title-only — worth surfacing, since
     /// a title-only document answers name queries and nothing else.
     pub chars: u64,
+    /// A fingerprint of what was embedded: title + text, under the chunker version that
+    /// split it. `index-corpus` reuses this document's passages and vectors from the
+    /// previous index when the fingerprint is unchanged, so adding one document embeds one
+    /// document. Absent in indexes built before it existed; those re-embed once.
+    #[serde(default)]
+    pub hash: Option<String>,
 }
 
 /// One passage. `doc` indexes into [`Corpus::docs`], so a document's metadata is stored
@@ -67,6 +73,19 @@ pub struct Header {
     pub built: String,
     /// The page this was scraped from — the provenance both surfaces can cite.
     pub source: String,
+    /// Where a newer index is fetched from. Carried by the DATA, not compiled into the
+    /// binary: the depot's bundled index says where its own updates live, which is what
+    /// lets one engine serve any registry without a rebuild.
+    #[serde(default)]
+    pub update_url: Option<String>,
+    /// Where a document's full text is fetched from, as `<text_base>/<id>.json`.
+    #[serde(default)]
+    pub text_base: Option<String>,
+    /// The code family a bare number means. "0083" is FR-0083 in a forms registry and
+    /// something else entirely in a statute book — the corpus says which, and the index
+    /// never assumes.
+    #[serde(default)]
+    pub default_family: Option<String>,
     pub docs: Vec<Doc>,
     pub chunks: Vec<Chunk>,
 }
@@ -188,6 +207,9 @@ mod tests {
                 dim: 2,
                 built: "2026-08-12".into(),
                 source: "https://example.invalid".into(),
+                update_url: None,
+                text_base: None,
+                default_family: None,
                 docs: vec![Doc {
                     id: "FR-0083.tr".into(),
                     code: Some("FR-0083".into()),
@@ -198,6 +220,7 @@ mod tests {
                     ext: "pdf".into(),
                     url: "https://example.invalid/f.pdf".into(),
                     chars: 120,
+                    hash: None,
                 }],
                 chunks: vec![
                     Chunk { doc: 0, ord: 0, text: "danışman değişikliği".into() },
@@ -222,6 +245,28 @@ mod tests {
         assert_eq!(back.docs()[0].code.as_deref(), Some("FR-0083"));
         assert_eq!(back.docs()[0].title, "Danışman Değişikliği Formu", "UTF-8 must survive");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Indexes written before `hash`, `update_url`, `text_base` and `default_family`
+    /// existed must keep loading: a synced copy in a user's data directory is exactly such
+    /// a file, and refusing it would turn an upgrade into a re-download.
+    #[test]
+    fn an_index_from_before_the_optional_fields_still_loads() {
+        let json = r#"{"version":1,"model":"intfloat/multilingual-e5-small","dim":2,
+            "built":"2026-08-12","source":"x",
+            "docs":[{"id":"FR-0001.tr","code":"FR-0001","rev":0,"lang":"tr","title":"T",
+                     "name":"n","ext":"pdf","url":"u","chars":0}],
+            "chunks":[{"doc":0,"ord":0,"text":"T"}]}"#;
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(MAGIC);
+        bytes.extend_from_slice(&(json.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(json.as_bytes());
+        bytes.extend_from_slice(&1.0f32.to_le_bytes());
+        bytes.extend_from_slice(&0.0f32.to_le_bytes());
+        let c = Corpus::from_bytes(&bytes).unwrap();
+        assert_eq!(c.docs()[0].hash, None);
+        assert_eq!(c.header.update_url, None);
+        assert_eq!(c.header.default_family, None);
     }
 
     #[test]
