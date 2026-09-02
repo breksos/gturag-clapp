@@ -2,7 +2,7 @@
 
 Every form Gebze Teknik Üniversitesi publishes, on one screen you and your agent share.
 
-1819 documents from the university's own quality system — forms, workflows, device and
+1850 documents from the university's own quality system — forms, workflows, device and
 laboratory instructions, directives, regulations, policies, surveys and guides, Turkish and
 English, `.docx`, `.xlsx`, `.pdf` and pre-2007 `.doc`/`.xls` alike — indexed so you can
 search by **what you want to do** rather than by what the document is called.
@@ -62,7 +62,7 @@ There is no server and no hosted vector store. This repo holds both halves:
 | | |
 |---|---|
 | `forms/FR-0083.tr.json` | one file per form — metadata and extracted text, ~2 KB each |
-| `corpus.gtu` | the built index: 1819 documents, 8426 passages, and their vectors |
+| `corpus.gtu` | the built index: 1850 documents, their passages, and their vectors |
 
 `forms/` is the source: reviewable, diffable, and small, so when GTÜ revises a form the
 change is visible in a pull request rather than buried in a binary. `corpus.gtu` is derived
@@ -136,7 +136,7 @@ gturag index-corpus forms --model <dir> --built 2026-08-13 --out corpus.gtu
 ```
 
 Chunking happens here rather than in the scraper, so passage policy can change without
-re-scraping 1819 documents or needing LibreOffice again. `--built` is an input, not the
+re-scraping 1850 documents or needing LibreOffice again. `--built` is an input, not the
 clock, so two runs over the same database produce byte-identical output.
 
 Users pick the new corpus up with `gturag sync`, which fetches `corpus.gtu` from the
