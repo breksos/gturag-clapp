@@ -58,8 +58,80 @@ pub const FORMS_BASE: &str = match option_env!("GTURAG_FORMS_BASE") {
     None => "https://raw.githubusercontent.com/breksos/gturag-clapp/main/forms",
 };
 
-pub fn model_dir(cli: &str) -> PathBuf {
+/// The environment variable a launcher sets to the root of its shared asset store.
+///
+/// Nothing sets this yet — the shared-asset primitive is proposed, not shipped. The name is
+/// read rather than the path hardcoded for the same reason `clappkit::paths` refuses to
+/// hardcode a data directory: the store is the launcher's to place, and an app that guesses
+/// its location breaks the day it moves. Until something sets it, every branch below falls
+/// through to the app's own copy and behaves exactly as it always has.
+pub const ASSETS_DIR_ENV: &str = "CLATCH_ASSETS_DIR";
+
+/// The asset this app needs, as a directory name: the model id with everything that is not
+/// safe in a path folded to `-`.
+///
+/// Derived from [`crate::corpus::MODEL_ID`] and nowhere else, because that same string is
+/// what `corpus.gtu` records and refuses to load against. Two clapps share a model only if
+/// they agree on bit-identical weights, so the thing that names the directory and the thing
+/// that validates the index must be one string — otherwise "shared" quietly means "similar".
+pub fn asset_slug() -> String {
+    crate::corpus::MODEL_ID
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '-' { c } else { '-' })
+        .collect()
+}
+
+/// Where this app keeps its OWN copy of the model — the only directory it ever writes to.
+pub fn own_model_dir(cli: &str) -> PathBuf {
     clappkit::data_subdir(cli, MODEL_DIR)
+}
+
+/// Every place a usable model could be, best first.
+///
+/// A shared copy is READ-ONLY to us. Clatch owns that store: it fetches, verifies and
+/// reference-counts what lives there, and an app that wrote into it would be filling a
+/// directory whose lifetime it does not control — the deduplication only holds if exactly
+/// one party is responsible for putting things in.
+fn candidates(cli: &str) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    if let Some(root) = std::env::var_os(ASSETS_DIR_ENV).filter(|v| !v.is_empty()) {
+        out.push(PathBuf::from(root).join(asset_slug()));
+    }
+    // The conventional location, for a launcher that populates a store without announcing
+    // it, and for a human who wants to drop the weights in by hand rather than wait for a
+    // 465 MB download they already have elsewhere.
+    if let Some(base) = clappkit::paths::home() {
+        out.push(base.join(".clatch").join("shared").join(asset_slug()));
+    }
+    out.push(own_model_dir(cli));
+    out
+}
+
+/// The model directory to LOAD from: the first candidate that actually holds the weights,
+/// or this app's own directory when none does — which is also where a download would put
+/// them, so the caller can treat the answer as "where the model is or will be".
+pub fn model_dir(cli: &str) -> PathBuf {
+    let candidates = candidates(cli);
+    for dir in &candidates {
+        if complete(dir) {
+            if dir != candidates.last().expect("own dir is always last") {
+                eprintln!("gturag: using the shared model at {}", clappkit::paths::simplified(dir).display());
+            }
+            return dir.clone();
+        }
+    }
+    own_model_dir(cli)
+}
+
+/// Does this directory hold all three files, at plausible sizes?
+fn complete(dir: &Path) -> bool {
+    MODEL_FILES.iter().all(|(name, size)| {
+        std::fs::metadata(dir.join(name))
+            // A truncated download from a killed process would otherwise pass as present
+            // and fail much later, inside safetensors, with a far worse message.
+            .map(|m| m.len() >= size / 2)
+            .unwrap_or(false)
+    })
 }
 
 pub fn index_path(cli: &str) -> PathBuf {
@@ -69,14 +141,7 @@ pub fn index_path(cli: &str) -> PathBuf {
 /// Is the model already on disk and plausibly complete? Cheap enough to call at startup —
 /// it stats three files and never opens the 450 MB one.
 pub fn model_present(cli: &str) -> bool {
-    let dir = model_dir(cli);
-    MODEL_FILES.iter().all(|(name, size)| {
-        std::fs::metadata(dir.join(name))
-            // A truncated download from a killed process would otherwise pass as present
-            // and fail much later, inside safetensors, with a far worse message.
-            .map(|m| m.len() >= size / 2)
-            .unwrap_or(false)
-    })
+    candidates(cli).iter().any(|d| complete(d))
 }
 
 /// Download `url` to `dest`, reporting whole-percent progress. Writes `<dest>.part` and
@@ -133,7 +198,9 @@ fn download(url: &str, dest: &Path, expect: u64, mut on_progress: impl FnMut(u8)
 /// Fetch the model's three files. `progress` sees 0–100 across the whole set, weighted by
 /// size, so the bar does not jump to 96% and sit there for four minutes.
 pub fn fetch_model(cli: &str, mut progress: impl FnMut(Stage)) -> Result<()> {
-    let dir = model_dir(cli);
+    // OWN directory, deliberately: see `candidates`. We read from a shared store and never
+    // write to one.
+    let dir = own_model_dir(cli);
     clappkit::ensure_private_dir(&dir)?;
     let grand_total: u64 = MODEL_FILES.iter().map(|(_, s)| *s).sum();
     let mut completed: u64 = 0;
@@ -286,6 +353,10 @@ pub fn load_cached_index(cli: &str) -> Option<Corpus> {
 mod tests {
     use super::*;
 
+    /// `CLATCH_ASSETS_DIR` is process-global and every test below sets it, so two running
+    /// concurrently would each see the other's store. Take this first, hold it throughout.
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     /// The trap this rule exists to avoid: `sync` writes into the data directory, the data
     /// directory survives updates by design, so "synced always wins" means one sync in 2026
     /// pins that user to a 2026 corpus through every release that follows. It never errors
@@ -300,6 +371,83 @@ mod tests {
         // A same-day rebuild is not "newer", so a synced index is not thrown away for a
         // bundled one of the same vintage.
         assert!(!(older > older.clone()));
+    }
+
+    /// Lay down files of a plausible size, so `complete` sees a real model rather than
+    /// three empty stubs.
+    fn plant(dir: &std::path::Path) {
+        std::fs::create_dir_all(dir).unwrap();
+        for (name, size) in MODEL_FILES {
+            std::fs::write(dir.join(name), vec![0u8; (*size / 2) as usize + 1]).unwrap();
+        }
+    }
+
+    /// The whole point: a model already on the machine is used, not downloaded again.
+    #[test]
+    fn a_shared_model_is_preferred_over_downloading_our_own() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = std::env::temp_dir().join(format!("gturag-shared-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let store = tmp.join("assets");
+        plant(&store.join(asset_slug()));
+
+        std::env::set_var(ASSETS_DIR_ENV, &store);
+        let chosen = model_dir("gturag-test-shared");
+        std::env::remove_var(ASSETS_DIR_ENV);
+
+        assert_eq!(chosen, store.join(asset_slug()), "the shared copy must win");
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// An announced store that is EMPTY is not a model. Falling through matters more than
+    /// preferring the shared path: a launcher may declare the store before it has fetched
+    /// anything, and an app that trusted the variable would load nothing and fail late.
+    #[test]
+    fn an_empty_store_falls_through_to_our_own_directory() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = std::env::temp_dir().join(format!("gturag-empty-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(tmp.join("assets")).unwrap();
+
+        std::env::set_var(ASSETS_DIR_ENV, tmp.join("assets"));
+        let chosen = model_dir("gturag-test-empty");
+        std::env::remove_var(ASSETS_DIR_ENV);
+
+        assert_eq!(chosen, own_model_dir("gturag-test-empty"));
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// We read from a shared store and never write to one. Clatch owns that directory's
+    /// lifetime; an app filling it would break the reference counting that makes sharing
+    /// safe to clean up.
+    #[test]
+    fn downloads_always_target_our_own_directory() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = std::env::temp_dir().join(format!("gturag-write-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        plant(&tmp.join("assets").join(asset_slug()));
+
+        std::env::set_var(ASSETS_DIR_ENV, tmp.join("assets"));
+        // Reading resolves to the shared copy...
+        assert_ne!(model_dir("gturag-test-write"), own_model_dir("gturag-test-write"));
+        // ...while the only directory fetch_model would write to stays our own.
+        assert_eq!(own_model_dir("gturag-test-write"), clappkit::data_subdir("gturag-test-write", MODEL_DIR));
+        std::env::remove_var(ASSETS_DIR_ENV);
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// The directory name comes from the id `corpus.gtu` validates against, so "shared"
+    /// cannot quietly come to mean "similar".
+    #[test]
+    fn the_asset_slug_is_the_model_id_and_is_path_safe() {
+        let slug = asset_slug();
+        assert!(slug.contains("multilingual-e5-small"), "{slug}");
+        assert!(!slug.contains('/'), "a slug with a separator is a directory traversal: {slug}");
+        assert!(
+            slug.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-'),
+            "{slug}"
+        );
+        assert_eq!(slug, asset_slug(), "and it is stable");
     }
 
     #[test]
