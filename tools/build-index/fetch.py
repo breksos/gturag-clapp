@@ -33,69 +33,18 @@ import zipfile
 from collections import defaultdict
 from pathlib import Path
 
-# Every page the university publishes quality documents on, discovered by sweeping its
-# category ids and recording which pages actually link files (tools/build-index/work/
-# pages.json holds that sweep). ONE script owns all of them, because the cull below deletes
-# any forms/*.json it did not write — split across two scripts, each run would wipe the
-# other's output.
-#
-# Not here, and not reachable at all: Görev Tanımları (208), Prosedürler (18), SPİKler,
-# Risk Analizleri. Those pages link to gtu-my.sharepoint.com, and the link serves an HTML
-# viewer, not a file — fetching one anonymously (browser user-agent, ?download=1, the
-# /:u:/ download form) returns a page whose content is "Sign in". They are behind the
-# university's own authentication, so no scraper of ours can index them; it would take a
-# credentialed export from the quality office. Said plainly here so nobody re-derives it.
-PAGES = [
-    ("https://www.gtu.edu.tr/kategori/2382/0/display.aspx", "Formlar"),
-    ("https://www.gtu.edu.tr/kategori/3103/0/display.aspx", "Cihaz Kullanım Talimatları"),
-    ("https://www.gtu.edu.tr/kategori/2381/0/display.aspx", "İş Akışları"),
-    ("https://www.gtu.edu.tr/kategori/9598/0/display.aspx", "Anketler"),
-    ("https://www.gtu.edu.tr/kategori/3186/0/display.aspx", "Laboratuvar Talimatları"),
-    ("https://www.gtu.edu.tr/kategori/2364/0/display.aspx", "Politikalar"),
-    ("https://www.gtu.edu.tr/kategori/7097/0/display.aspx", "Raporlar"),
-    ("https://www.gtu.edu.tr/kategori/2877/0/display.aspx", "Kılavuzlar"),
-]
-
-# Yönergeler, Yönetmelikler and a few Kılavuzlar have no listing page anywhere on the site,
-# but their files ARE on the CDN — probe.py resolved them from the university's own register
-# (LS-0003) by constructing and HEAD-checking candidate URLs. Merged in here so the corpus
-# is not missing the university's actual regulations just because nobody links to them.
-EXTRA = WORK_PROBE = "probe.json"
-
-ORIGIN = "https://www.gtu.edu.tr"
-UA = {"User-Agent": "Mozilla/5.0 (compatible; gturag-index/0.1)"}
+# Everything source-specific — the listing pages, the code grammar, the CDN map,
+# the keep-rule roots — lives in source.py. This file is the generic half: list,
+# download, extract, clean, cull, write. Attaching a different registry means
+# editing source.py, not this.
+from source import (
+    CODE_RE, EN_DIR, KEEP_ROOT, LEGACY_EXT, ORIGIN, PAGES, REV_RE, TEXT_EXT, UA,
+)
 
 HERE = Path(__file__).resolve().parent
 WORK = HERE / "work"
 RAW = WORK / "raw"
 TXT = WORK / "txt"
-
-# What makes a document part of this corpus: it lives under the quality office's tree and
-# it carries a form code. NOT its exact folder — four real forms (FR-0044, FR-0515,
-# FR-0553, FR-0797) sit one and two levels above Formlar-Türkçe, and a folder-literal rule
-# silently culled all four. The site-wide KVKK notice in the page footer fails both tests,
-# which is the one thing on this page that genuinely is not a form.
-KEEP_ROOT = "/kalite/"
-# The English sub-collections, wherever they appear. A TUPLE, not a string: `any(d in
-# path for d in EN_DIR)` over a bare string iterates its CHARACTERS, and every path
-# containing an "F" would have been called English.
-EN_DIR = ("Formlar-İngilizce", "İngilizce Anketler")
-
-# `FR-0083`, `FR_0083`, `FR 0083`, and the real typo on the page, `FR- 0784`.
-# `FR-0083`, `FR_0083`, `FR 0083`, the real typo on the page `FR- 0784`, and the compound
-# families the wider corpus brought in: `CH-TL-0001`, `LAB-TL-0042`, `İSG-TL-0007`. The
-# optional middle segment is what makes those ONE code rather than a `CH` plus a stray
-# number — without it 456 device instructions collapse onto each other.
-# The trailing guard is (?!\d), NOT \b: `CH-TL-0001_VAKUMLU_ETUV...` continues
-# with an underscore, which IS a word character, so a word boundary fails there and 444
-# of 457 device instructions came back with no code at all. What we actually mean is
-# "the number ends here" — no further digits.
-CODE_RE = re.compile(r"\b([A-ZÇĞİÖŞÜ]{2,4}(?:-[A-ZÇĞİÖŞÜ]{2,4})?)[-_ ]{0,2}(\d{3,4})(?!\d)")
-REV_RE = re.compile(r"\bR(\d{1,2})\b", re.IGNORECASE)
-
-TEXT_EXT = {"docx", "xlsx", "xlsm", "pdf", "doc", "xls"}
-# LibreOffice is the only sane reader for the pre-2007 binary formats.
-LEGACY_EXT = {"doc", "xls"}
 
 
 # ---------------------------------------------------------------- scraping the page
@@ -473,6 +422,16 @@ def main() -> int:
             body = clean(extract(path, rec["ext"], converter))
         else:
             failures.append({"id": did, "name": rec["name"], "error": rec.get("error")})
+            # The page lists this document but its file 404s — the university's own link
+            # is broken. If the database already holds text for the SAME revision, keep
+            # it: a broken link must not erase text we extracted from that very revision.
+            # A different revision is not kept — that text would be silently wrong.
+            stale = FORMS / f"{did}.json"
+            if stale.is_file():
+                prev = json.loads(stale.read_text(encoding="utf-8"))
+                if prev.get("text") and prev.get("rev") == rec["rev"]:
+                    body = prev["text"]
+                    failures[-1]["kept_previous_text"] = True
 
         write_form(rec, did, body)
         written.add(f"{did}.json")

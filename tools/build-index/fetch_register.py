@@ -19,7 +19,7 @@ HERE = Path(__file__).resolve().parent
 WORK = HERE / "work"
 RAW = WORK / "raw-register"
 FORMS = HERE.parent.parent / "forms"
-UA = {"User-Agent": "Mozilla/5.0 (compatible; gturag-index/0.2)"}
+from source import UA
 
 # Reuse fetch.py's extractors (docx/xlsx/pdf/legacy via LibreOffice) — one implementation.
 spec = importlib.util.spec_from_file_location("fetchmod", HERE / "fetch.py")

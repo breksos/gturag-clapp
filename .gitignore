@@ -32,3 +32,6 @@ jlcpcb-clapp/
 # The university's own document list, supplied for the corpus expansion. Input to the
 # builder, not source.
 *.xlsx
+
+# Python bytecode from the maintainer scripts.
+__pycache__/

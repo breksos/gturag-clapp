@@ -61,9 +61,19 @@ jobs:
         # WebView2: the MSVC toolchain links the LOADER statically, so the depot ships zero
         # DLLs. A -gnu host would need WebView2Loader.dll beside the exe, and the failure is
         # silent (PLAYBOOK §9).
+        #
+        # NOT `rustc -vV | grep -q`: `grep -q` exits at its first match and closes the pipe,
+        # rustc then dies writing to it ("failed printing to stdout ... os error 232"), and
+        # this shell runs with `set -o pipefail` — so the pipeline failed precisely WHEN the
+        # host matched, and the assert rejected every MSVC runner it exists to accept.
+        # `$(...)` reads rustc to the end, so there is no pipe to close early.
         run: |
           rustc -vV
-          rustc -vV | grep -q 'host: .*-msvc' || { echo "::error::not an MSVC host"; exit 1; }
+          host=$(rustc -vV | sed -n 's/^host: //p')
+          case "$host" in
+            *-msvc) echo "host = $host" ;;
+            *) echo "::error::not an MSVC host: $host"; exit 1 ;;
+          esac
 
       - uses: actions/setup-node@v4
         with:

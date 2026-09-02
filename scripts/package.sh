@@ -46,9 +46,58 @@ BIN="$ROOT/src-tauri/target/release/${CLI}${EXE}"
 echo "→ assembling pkg/"
 rm -rf "$PKG"
 mkdir -p "$PKG/bin" "$PKG/assets"
-cp "$BIN" "$PKG/bin/"
 cp "$ROOT/assets/icon.png" "$PKG/assets/"
+# The library detail page draws this behind the identity text. Declared in the
+# manifest, so it must be here: a declared asset that is missing fails validate and
+# install both.
+cp "$ROOT/assets/banner.png" "$PKG/assets/"
 cp "$ROOT/THIRD_PARTY_NOTICES.md" "$PKG/"
+
+# On macOS the binary goes inside a real .app bundle; everywhere else it sits in bin/.
+#
+# icons.md: "a bare executable has no icon identity, so the Dock falls back to a generic
+# terminal tile" — and no runtime call fixes that, because the Dock reads the bundle. The
+# .icns is the same mark as the library tile, inset to the 824/1024 macOS grid by
+# scripts/icon.py, so the shelf gets full-bleed and the Dock gets its margin from one
+# source.
+#
+# The DIRECTORY is named after `connector.cli`, never after the display name — PLAYBOOK
+# §12b: format.md limits every component of `cliBin` to [A-Za-z0-9._-], and this app's
+# name is "GTÜ Formlar", which carries both a space and a non-ASCII letter. What a person
+# reads is CFBundleName/CFBundleDisplayName below, in full. The assertion further down
+# would catch a regression, but the point is not to need it.
+if [ "$OS" = macos ]; then
+    ICNS="$ROOT/src-tauri/icons/icon.icns"
+    [ -f "$ICNS" ] || { echo "package.sh: $ICNS is missing — run scripts/icon.py" >&2; exit 1; }
+    APP="$PKG/bin/$CLI.app"
+    LAUNCH_REL="bin/$CLI.app/Contents/MacOS/$CLI"
+    mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+    cp "$BIN" "$APP/Contents/MacOS/$CLI"
+    cp "$ICNS" "$APP/Contents/Resources/icon.icns"
+    NAME=$(node -p "require('$ROOT/clatch.json').name")
+    cat > "$APP/Contents/Info.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleExecutable</key><string>$CLI</string>
+  <key>CFBundleIdentifier</key><string>$ID</string>
+  <key>CFBundleName</key><string>$NAME</string>
+  <key>CFBundleDisplayName</key><string>$NAME</string>
+  <key>CFBundleIconFile</key><string>icon</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+  <key>CFBundleShortVersionString</key><string>$VERSION</string>
+  <key>CFBundleVersion</key><string>$VERSION</string>
+  <key>LSMinimumSystemVersion</key><string>10.15</string>
+  <key>NSHighResolutionCapable</key><true/>
+</dict>
+</plist>
+PLIST
+else
+    LAUNCH_REL="bin/$CLI$EXE"
+    cp "$BIN" "$PKG/bin/"
+fi
 
 # The index ships INSIDE the depot, so a first run is never blocked on the network for
 # anything but the model. `clappkit::paths::install_root()` finds it here by walking up to
@@ -71,9 +120,9 @@ cp "$ROOT/corpus.gtu" "$PKG/"
 # and needs no cygpath.
 node -e "
   const m = require('./clatch.json');
-  const os = '$OS', exe = '$EXE', cli = '$CLI';
-  m.launch = { [os]: 'bin/' + cli + exe, args: ['app'] };
-  m.connector.cliBin = 'bin/' + cli + exe;
+  const os = '$OS', rel = '$LAUNCH_REL';
+  m.launch = { [os]: rel, args: ['app'] };
+  m.connector.cliBin = rel;
   require('fs').writeFileSync('pkg/clatch.json', JSON.stringify(m, null, 2) + '\n');
 "
 
