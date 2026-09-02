@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Regenerate every icon artifact from the one editable source, assets/icon.svg.
 
-docs/ICONS.md: the mark is regenerated, never hand-traced, and the .ico is derived from
-the same PNG so the two cannot drift. PLAYBOOK §9: icons/icon.ico is MANDATORY on Windows
-— tauri-build compiles a Windows resource from the first .ico in bundle.icon and fails
-without one, even with bundle.active: false.
+clappkit docs/icons.md: the mark is regenerated, never hand-traced, and every derived
+artifact comes off the same PNG so they cannot drift. playbook §9: icons/icon.ico is
+MANDATORY on Windows — tauri-build compiles a Windows resource from the first .ico in
+bundle.icon and fails without one, even with bundle.active: false. The .icns is what the
+macOS Dock and Finder read out of the .app bundle scripts/package.sh builds.
 
     python scripts/icon.py
 
@@ -34,6 +35,17 @@ SIDE = 1024
 # 125%/150%/175%/200% display scaling actually asks for, and 128 is what the extra-large
 # Explorer view uses.
 ICO_SIZES = [16, 20, 24, 32, 40, 48, 64, 96, 128, 256]
+
+# The macOS iconset: five sizes, each with its @2x. `iconutil` wants exactly these names.
+ICNS_SIZES = [16, 32, 128, 256, 512]
+
+# How much of the 1024 canvas a macOS app icon's ARTWORK occupies. Measured, not quoted:
+# /System/Applications/App Store.app's AppIcon.icns rasterised to 1024 has its opaque
+# bounding box at exactly (100,100)-(924,924). The library tile is full-bleed on purpose
+# — the Clatch shelf wants that (icons.md rule 2) — but the Dock insets every icon, and an
+# .app whose icns is full-bleed towers over its neighbours. So the icns carries the margin
+# the platform expects, and the two files differ by exactly this number.
+MACOS_GRID = 824 / 1024
 
 
 def soffice() -> str:
@@ -84,6 +96,44 @@ def measure(im: Image.Image) -> str:
     return f"{100 * (box[2] - box[0]) // w}% x {100 * (box[3] - box[1]) // h}%"
 
 
+def dock_grid(im: Image.Image) -> Image.Image:
+    """The full-bleed tile, inset onto the macOS icon grid with a transparent margin."""
+    side = im.size[0]
+    art = round(side * MACOS_GRID)
+    canvas = Image.new("RGBA", (side, side), (0, 0, 0, 0))
+    off = (side - art) // 2
+    canvas.paste(im.resize((art, art), Image.LANCZOS), (off, off))
+    return canvas
+
+
+def write_icns(im: Image.Image, dest: Path) -> str:
+    """Write a macOS .icns from the tile.
+
+    `iconutil` is the canonical writer and is present wherever a macOS depot is built, so
+    it is preferred; Pillow's own ICNS encoder is the fallback for building the artifact
+    off a Mac. Both are real encoders — this is not the "packaging fallback that just
+    copies" the playbook warns about, and a missing encoder is still a hard failure.
+    """
+    inset = dock_grid(im)
+    tool = shutil.which("iconutil")
+    if tool:
+        with tempfile.TemporaryDirectory() as tmp:
+            iconset = Path(tmp) / "icon.iconset"
+            iconset.mkdir()
+            for s in ICNS_SIZES:
+                inset.resize((s, s), Image.LANCZOS).save(iconset / f"icon_{s}x{s}.png")
+                inset.resize((s * 2, s * 2), Image.LANCZOS).save(
+                    iconset / f"icon_{s}x{s}@2x.png")
+            subprocess.run([tool, "-c", "icns", str(iconset), "-o", str(dest)],
+                           check=True, timeout=120)
+        return "iconutil"
+    try:
+        inset.save(dest, format="ICNS")
+    except Exception as e:  # noqa: BLE001 — the message is the whole point
+        sys.exit(f"icon.py: cannot write {dest.name}: {e}")
+    return "Pillow"
+
+
 def main() -> int:
     if not SVG.exists():
         sys.exit(f"icon.py: {SVG} is missing")
@@ -97,11 +147,14 @@ def main() -> int:
     im.resize((512, 512), Image.LANCZOS).save(ICONS / "icon.png", "PNG")
     im.save(ICONS / "icon.ico", format="ICO",
             sizes=[(s, s) for s in ICO_SIZES])
+    icns = write_icns(im, ICONS / "icon.icns")
 
     size_kib = PNG.stat().st_size / 1024
     print(f"  {PNG.relative_to(ROOT)}  {im.size[0]}x{im.size[1]}  {size_kib:.0f} KiB")
     print(f"  fill: {measure(im)}   (a full-bleed tile should read ~100% x ~100%)")
     print(f"  {(ICONS / 'icon.ico').relative_to(ROOT)}  {ICO_SIZES}")
+    print(f"  {(ICONS / 'icon.icns').relative_to(ROOT)}  {icns}  "
+          f"(artwork at {MACOS_GRID:.1%} — the macOS grid)")
     if size_kib > 1024:
         sys.exit("icon.py: the PNG exceeds the protocol's 1 MiB ceiling")
     return 0
