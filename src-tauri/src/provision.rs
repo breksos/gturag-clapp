@@ -107,20 +107,35 @@ fn candidates(cli: &str) -> Vec<PathBuf> {
     out
 }
 
-/// The model directory to LOAD from: the first candidate that actually holds the weights,
-/// or this app's own directory when none does — which is also where a download would put
-/// them, so the caller can treat the answer as "where the model is or will be".
-pub fn model_dir(cli: &str) -> PathBuf {
-    let candidates = candidates(cli);
-    for dir in &candidates {
+/// Pick from an explicit list, last entry being our own directory: the first candidate that
+/// actually holds the weights, or that own directory when none does.
+///
+/// Split out from [`model_dir`] so the RULE can be tested without the machine's real home
+/// directory being part of the assertion. Testing the rule through `model_dir` meant every
+/// case silently depended on whether `~/.clatch/shared` happened to be populated — green on
+/// a clean checkout, red on any machine that had ever shared this model, which is precisely
+/// backwards for a feature about sharing.
+fn resolve(candidates: &[PathBuf]) -> PathBuf {
+    let own = candidates.last().expect("own dir is always last");
+    for dir in candidates {
         if complete(dir) {
-            if dir != candidates.last().expect("own dir is always last") {
-                eprintln!("gturag: using the shared model at {}", clappkit::paths::simplified(dir).display());
+            if dir != own {
+                eprintln!(
+                    "gturag: using the shared model at {}",
+                    clappkit::paths::simplified(dir).display()
+                );
             }
             return dir.clone();
         }
     }
-    own_model_dir(cli)
+    own.clone()
+}
+
+/// The model directory to LOAD from: the first candidate that actually holds the weights,
+/// or this app's own directory when none does — which is also where a download would put
+/// them, so the caller can treat the answer as "where the model is or will be".
+pub fn model_dir(cli: &str) -> PathBuf {
+    resolve(&candidates(cli))
 }
 
 /// Does this directory hold all three files, at plausible sizes?
@@ -375,27 +390,35 @@ mod tests {
 
     /// Lay down files of a plausible size, so `complete` sees a real model rather than
     /// three empty stubs.
+    ///
+    /// `set_len` rather than a written buffer: `complete` reads the LENGTH, and planting a
+    /// real 235 MB safetensors in each of three tests moved most of a gigabyte through the
+    /// page cache to assert something about a directory listing.
     fn plant(dir: &std::path::Path) {
         std::fs::create_dir_all(dir).unwrap();
         for (name, size) in MODEL_FILES {
-            std::fs::write(dir.join(name), vec![0u8; (*size / 2) as usize + 1]).unwrap();
+            let f = std::fs::File::create(dir.join(name)).unwrap();
+            f.set_len(size / 2 + 1).unwrap();
         }
+    }
+
+    /// A scratch directory that cleans itself up, named for the test that made it.
+    fn scratch(what: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("gturag-{what}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
     }
 
     /// The whole point: a model already on the machine is used, not downloaded again.
     #[test]
     fn a_shared_model_is_preferred_over_downloading_our_own() {
-        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let tmp = std::env::temp_dir().join(format!("gturag-shared-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&tmp);
-        let store = tmp.join("assets");
-        plant(&store.join(asset_slug()));
+        let tmp = scratch("shared");
+        let shared = tmp.join("store").join(asset_slug());
+        let own = tmp.join("own");
+        plant(&shared);
 
-        std::env::set_var(ASSETS_DIR_ENV, &store);
-        let chosen = model_dir("gturag-test-shared");
-        std::env::remove_var(ASSETS_DIR_ENV);
-
-        assert_eq!(chosen, store.join(asset_slug()), "the shared copy must win");
+        assert_eq!(resolve(&[shared.clone(), own]), shared, "the shared copy must win");
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
@@ -404,16 +427,27 @@ mod tests {
     /// anything, and an app that trusted the variable would load nothing and fail late.
     #[test]
     fn an_empty_store_falls_through_to_our_own_directory() {
-        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let tmp = std::env::temp_dir().join(format!("gturag-empty-{}", std::process::id()));
+        let tmp = scratch("empty");
+        let empty = tmp.join("store").join(asset_slug());
+        std::fs::create_dir_all(&empty).unwrap();
+        let own = tmp.join("own");
+
+        assert_eq!(resolve(&[empty, own.clone()]), own);
         let _ = std::fs::remove_dir_all(&tmp);
-        std::fs::create_dir_all(tmp.join("assets")).unwrap();
+    }
 
-        std::env::set_var(ASSETS_DIR_ENV, tmp.join("assets"));
-        let chosen = model_dir("gturag-test-empty");
-        std::env::remove_var(ASSETS_DIR_ENV);
+    /// A store holding a HALF-downloaded model is not a model either. The size floor is the
+    /// only thing standing between a killed download and a failure raised much later, from
+    /// inside safetensors, about a file the user never chose to fetch.
+    #[test]
+    fn a_truncated_shared_model_does_not_satisfy_us() {
+        let tmp = scratch("truncated");
+        let shared = tmp.join("store").join(asset_slug());
+        plant(&shared);
+        std::fs::File::create(shared.join("model.safetensors")).unwrap().set_len(4096).unwrap();
+        let own = tmp.join("own");
 
-        assert_eq!(chosen, own_model_dir("gturag-test-empty"));
+        assert_eq!(resolve(&[shared, own.clone()]), own);
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
@@ -422,18 +456,36 @@ mod tests {
     /// safe to clean up.
     #[test]
     fn downloads_always_target_our_own_directory() {
-        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let tmp = std::env::temp_dir().join(format!("gturag-write-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&tmp);
-        plant(&tmp.join("assets").join(asset_slug()));
+        let tmp = scratch("write");
+        let shared = tmp.join("store").join(asset_slug());
+        plant(&shared);
+        let own = own_model_dir("gturag-test-write");
 
-        std::env::set_var(ASSETS_DIR_ENV, tmp.join("assets"));
         // Reading resolves to the shared copy...
-        assert_ne!(model_dir("gturag-test-write"), own_model_dir("gturag-test-write"));
-        // ...while the only directory fetch_model would write to stays our own.
-        assert_eq!(own_model_dir("gturag-test-write"), clappkit::data_subdir("gturag-test-write", MODEL_DIR));
-        std::env::remove_var(ASSETS_DIR_ENV);
+        assert_eq!(resolve(&[shared.clone(), own.clone()]), shared);
+        // ...while the only directory fetch_model would write to stays our own, under the
+        // app's data dir, which is the one place we are entitled to create files.
+        assert_eq!(own, clappkit::data_subdir("gturag-test-write", MODEL_DIR));
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// The search order, stated once: an announced store, then the conventional one, then
+    /// ours — and ours is always last, which is what makes `resolve`'s fallback correct.
+    #[test]
+    fn the_search_order_puts_our_own_directory_last() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let store = std::env::temp_dir().join("gturag-order-store");
+
+        std::env::set_var(ASSETS_DIR_ENV, &store);
+        let announced = candidates("gturag-test-order");
+        std::env::remove_var(ASSETS_DIR_ENV);
+        let bare = candidates("gturag-test-order");
+
+        assert_eq!(announced.first().unwrap(), &store.join(asset_slug()),
+                   "an announced store is searched first");
+        assert_eq!(announced.last().unwrap(), &own_model_dir("gturag-test-order"));
+        assert_eq!(bare.last().unwrap(), &own_model_dir("gturag-test-order"));
+        assert_eq!(announced.len(), bare.len() + 1, "the variable ADDS a place to look");
     }
 
     /// The directory name comes from the id `corpus.gtu` validates against, so "shared"
@@ -452,8 +504,9 @@ mod tests {
 
     #[test]
     fn a_missing_model_is_not_reported_as_present() {
-        let _g = std::env::temp_dir();
-        assert!(!model_present("gturag-test-absent-model"));
+        let tmp = scratch("absent");
+        assert!(!complete(&tmp.join("nothing-here")));
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]
