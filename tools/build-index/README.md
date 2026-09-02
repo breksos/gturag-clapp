@@ -15,8 +15,10 @@ LS-0003.xlsx ──register.py──▶ work/register.json          the inventor
      fetch_register.py                                    register rows → downloaded,
                      │                                    text extracted, culled
                      ▼
-     gturag index-corpus ─────▶ ../../corpus.gtu          chunked + embedded, by the
-                                                          SAME code that embeds queries
+     npm run corpus ──────────▶ ../../corpus.gtu          chunked + embedded by the SAME
+     (gturag index-corpus)                                code that embeds queries — and
+                                                          INCREMENTAL: only changed
+                                                          documents are embedded
 ```
 
 - **`register.py`** — parses the source's own inventory workbook into
@@ -37,7 +39,10 @@ LS-0003.xlsx ──register.py──▶ work/register.json          the inventor
 
 Stage 2 (chunk + embed) is deliberately in the app's own binary — see
 `src-tauri/src/build_index.rs` — because passages must be embedded by the same
-code that embeds queries, or retrieval drifts in ways nothing ever reports.
+code that embeds queries, or retrieval drifts in ways nothing ever reports. It
+is incremental: each document's fingerprint is stored in the index, and a
+rebuild reuses every unchanged document's vectors. Removing a document needs no
+model; adding one embeds one.
 
 ## Attaching a different source
 

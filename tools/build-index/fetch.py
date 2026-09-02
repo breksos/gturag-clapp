@@ -465,7 +465,7 @@ def main() -> int:
     print(f"  no text   : {len(empty)}  (indexed by title alone)")
     print(f"  removed   : {len(removed)}")
     print(f"  failures  : {len(failures)}")
-    print(f"\n  next:  gturag index-corpus --built $(date +%F) --model <dir>")
+    print("\n  next:  npm run corpus   (embeds only what changed)")
     return 1 if failures else 0
 
 

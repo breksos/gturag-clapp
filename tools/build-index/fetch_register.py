@@ -6,7 +6,7 @@ yönetmelikler, görev tanımları, iş akışları, talimatlar, anketler, planl
 university's own register (LS-0003) via probe.py, which proved each URL with a HEAD before
 we spend a byte here. This stage downloads the proven set, extracts text with the same
 extractors fetch.py uses — one set of extraction bugs, not two — and writes one
-forms/<CODE>.tr.json per document in exactly the shape `gturag index-corpus` reads.
+forms/<CODE>.tr.json per document in exactly the shape stage 2 (`npm run corpus`) reads.
 
     python tools/build-index/fetch_register.py            # incremental; re-uses raw cache
     python tools/build-index/fetch_register.py --refresh
