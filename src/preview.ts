@@ -5,7 +5,7 @@
 // agent-driven search, a title-only document. Waiting for a 450 MB download to see what
 // the progress bar looks like is not a workflow.
 //
-//     npm run dev:web        then open /?preview=<state>
+//     npm run dev            then open /?preview=<state>
 //
 // It works by answering the two calls bridge.ts makes — `run_cmd` and the `state` event —
 // before @tauri-apps/api can fail to find a host. Nothing in App.tsx knows it is being

@@ -194,9 +194,12 @@ async fn run_cmd(core: tauri::State<'_, Arc<Core>>, app: tauri::AppHandle, req: 
     Ok(reply.resp)
 }
 
+/// An agent's avatar for the window, as a data URI. Confined to the paths the roster itself
+/// names (clappkit K1): without that, `asset` was a way for the webview to read any file the
+/// user can.
 #[tauri::command]
-fn asset(path: String) -> Option<String> {
-    kit::asset(&path)
+fn asset(core: tauri::State<'_, Arc<Core>>, path: String) -> Option<String> {
+    kit::avatar_uri(&path, &core.control)
 }
 
 /// Open a form on the university's own site, in the user's real browser.

@@ -53,9 +53,10 @@ THE APP
 
 NOTES
   Retrieval runs entirely on this machine. The index ships inside the app; on first run
-  the app downloads the embedding model (~450 MB) into a cache shared by every clapp of
-  this family, so a second app never downloads it again. Until the model lands, search
-  still answers — lexically. `status` says which state it is in.
+  the app downloads the embedding model (~465 MB) into its own data directory, unless a
+  copy is already in the shared store (~/.clatch/shared), which it then reads instead.
+  Until the model lands, search still answers — lexically. `status` says which state it
+  is in.
 
   The corpus is every form on the university's quality-office Formlar page, kept at its
   current revision. A form indexed by title alone (a pre-2007 .doc with no extractable

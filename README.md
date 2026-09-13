@@ -22,9 +22,9 @@ the agent, and both calling the same methods so they cannot drift. What you open
 rides along on your next prompt; what the agent searches for fills your screen.
 
 **The app retrieves; the agent answers.** No language model ships here and none runs on a
-server. The only model involved is a sentence embedder, downloaded once per machine into a
-cache every clapp of this family shares — after that, retrieval is entirely local and works
-offline.
+server. The only model involved is a sentence embedder, downloaded once, on first run, into
+the app's own data directory (a copy already in the shared store at `~/.clatch/shared` is
+read instead) — after that, retrieval is entirely local and works offline.
 
 Retrieval is hybrid, in this order:
 
@@ -99,8 +99,18 @@ clatch agent grant <agent> app:com.breksos.gturag
 git clone --recurse-submodules https://github.com/breksos/gturag-clapp
 cd gturag-clapp
 npm install
-npm run verify        # tests → package → validate → CLI ⇄ GUI round-trip
+npm run verify        # build → package → tests → validate → CLI ⇄ GUI round-trip
 ```
+
+The scripts are the family's, so they mean the same thing in every clapp:
+
+| goal | command |
+|---|---|
+| build the shippable binary | `npm run build` |
+| tests · types · manifest vs code | `npm test` · `npm run typecheck` · `npm run check` |
+| assemble the depot · validate it · pack the host `.clapp` | `npm run package` · `npm run validate` · `npm run pack` |
+| **prove it works** | `npm run verify` |
+| refresh the corpus | `npm run index` then `npm run corpus` |
 
 `clappkit` is carried as a submodule; `git submodule update --remote clappkit` moves it
 forward deliberately.
@@ -167,8 +177,9 @@ stamped in the header. The one language-specific piece, Turkish `İ`/`ı` foldin
 A release carries only the depots; the index rides inside each one:
 
 ```
-com.breksos.gturag-windows-x64.clapp        binary + icon + manifest + corpus.gtu
-com.breksos.gturag-windows-x64.clapp.sha256
+com.breksos.gturag-macos-arm64.clapp        binary + icon + manifest + corpus.gtu
+com.breksos.gturag-windows-x64.clapp        (each with its .sha256 beside it)
+com.breksos.gturag-linux-x64.clapp
 ```
 
 Push a `v*` tag and `release.yml` builds one per platform. It needs no repository secret and

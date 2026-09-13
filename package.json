@@ -1,18 +1,22 @@
 {
   "name": "gturag",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "private": true,
   "type": "module",
   "scripts": {
-    "dev:web": "vite",
+    "dev": "vite",
+    "build": "scripts/build.sh",
     "build:web": "tsc --noEmit && vite build",
-    "preview:web": "vite build && vite preview",
-    "dev": "tauri dev",
-    "build": "tauri build",
-    "pack": "bash scripts/package.sh",
-    "verify": "bash scripts/verify.sh",
-    "index": "python tools/build-index/fetch.py",
-    "corpus": "bash scripts/corpus.sh"
+    "test": "cargo test --manifest-path src-tauri/Cargo.toml",
+    "typecheck": "tsc --noEmit",
+    "check": "node scripts/check-manifest.mjs",
+    "verify": "scripts/verify.sh",
+    "package": "scripts/package.sh",
+    "validate": "scripts/validate.sh",
+    "pack": "scripts/pack.sh",
+    "tauri": "tauri",
+    "corpus": "bash scripts/corpus.sh",
+    "index": "python tools/build-index/fetch.py"
   },
   "dependencies": {
     "react": "^18.3.1",

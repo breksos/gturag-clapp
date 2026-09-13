@@ -10,7 +10,7 @@
     "search",
     "productivity"
   ],
-  "version": "0.1.4",
+  "version": "0.1.5",
   "publisher": "breksos",
   "protocol": 2,
   "icon": "assets/icon.png",
@@ -25,6 +25,7 @@
   },
   "connector": {
     "cli": "gturag",
+    "cliBin": "bin/gturag",
     "commands": [
       {
         "name": "search",

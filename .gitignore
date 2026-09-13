@@ -6,12 +6,22 @@ pkg/
 # Rust
 target/
 
+# macOS and tooling noise
+.DS_Store
+*.app/
+*.log
+# Personal Claude Code settings (the shared .claude/launch.json IS committed)
+.claude/settings.local.json
+
 # Tauri regenerates these from tauri.conf.json on every build.
 src-tauri/gen/
 
-# Node / Vite
+# Node / Vite. dist-web/ is Vite's outDir and tauri.conf.json's frontendDist; dist/ is
+# ignored too because it was the outDir before, and a stale copy must not be committed.
 node_modules/
+dist-web/
 dist/
+build/
 
 # The provisioned artifacts — model weights and the corpus index are downloaded,
 # not committed. The builder writes them here while working.
