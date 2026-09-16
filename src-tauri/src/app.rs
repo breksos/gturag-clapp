@@ -1,27 +1,48 @@
 //! The GUI role: Tauri wiring, the control pipe, and provisioning.
 //!
-//! Glue only. Every decision worth testing is in [`crate::state`], which is why nothing
-//! here has a test — there is nothing here to be right or wrong about that a window server
-//! is not required to observe.
+//! Glue only. Every decision worth testing is in [`crate::state`], and the network lives in
+//! [`crate::provision`] and [`crate::live`]; this file decides WHEN they run, and runs them
+//! outside the state lock, because a window that freezes for a file transfer reads as a
+//! crash.
 
-use crate::provision;
-use crate::state::{AppState, By, Stage};
-use crate::{APP_ID, CLI};
+use crate::corpus::{Corpus, Doc};
+use crate::index::Filter;
+use crate::live::{self, Live};
+use crate::meta::Level;
+use crate::provision::{self, Synced};
+use crate::state::{AppState, By, Stage, SyncInfo, SyncOutcome};
+use crate::{util, APP_ID, CLI};
 use clappkit::app::{self as kit, Reply};
 use clappkit::{Control, WindowPolicy};
 use serde_json::{json, Value};
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
+use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::Mutex;
 
 /// The app's own mark. Bytes stay per-app because they ARE the app's identity.
 const ICON: &[u8] = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/../assets/icon.png"));
 
+/// How long a site check stays true. Long enough that paging through results does not ask
+/// the university about every row again; short enough that a window left open over a day
+/// notices a revision published in the meantime.
+const LIVE_TTL_SECS: u64 = 6 * 3600;
+
+/// How many of a search's top results are checked against the site, in the background.
+const LIVE_TOP: usize = 5;
+
+/// How long a search must stand before its rows are checked. The window searches as the
+/// human types; asking the university about every intermediate result list would be a
+/// burst of requests for pages nobody looked at.
+const LIVE_SETTLE_MS: u64 = 1500;
+
+/// Bumped by every search; a background check that finds it moved on gives up.
+static SEARCH_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 /// The window handle and the core, reachable from a command handler.
 ///
-/// `sync` is the reason these exist: it is the one verb that restarts a background job,
-/// so it needs the handle that pushes snapshots and an owned `Arc<Core>` to hand the
-/// thread — and it arrives over the IPC channel, where neither is a parameter. Set once,
-/// during `setup`, before anything can be served.
+/// `sync` restarts background work and arrives over the IPC channel, where neither is a
+/// parameter. Set once, during `setup`, before anything can be served.
 static APP: std::sync::OnceLock<tauri::AppHandle> = std::sync::OnceLock::new();
 static CORE: std::sync::OnceLock<Arc<Core>> = std::sync::OnceLock::new();
 
@@ -36,6 +57,17 @@ pub struct Core {
     pub state: Mutex<AppState>,
     pub embedder: Mutex<Option<crate::embed::Embedder>>,
     pub control: Control,
+}
+
+/// What a command still has to do once its response is decided.
+enum Then {
+    Nothing,
+    /// The CLI's `open` waits for the site check, so it can print the answer.
+    CheckNow(String),
+    /// The window's `open` is checked while the human reads it.
+    CheckLater(Vec<String>),
+    /// A search's top rows are checked once the search has stood for a moment.
+    CheckRows(Vec<String>),
 }
 
 impl Core {
@@ -55,11 +87,6 @@ impl Core {
     }
 
     /// Apply one command envelope and answer with the response plus a fresh snapshot.
-    ///
-    /// Both come out of ONE critical section on purpose: an app that returns a response
-    /// and then re-locks to take a snapshot leaves a window in which provisioning can
-    /// interleave, so the state pushed to the webview describes a different moment than
-    /// the response the caller got.
     pub async fn apply(&self, req: Value, caller: Option<String>) -> Reply {
         let by = match caller {
             Some(id) => By::Agent(id),
@@ -68,115 +95,109 @@ impl Core {
         let cmd = req.get("cmd").and_then(Value::as_str).unwrap_or("").to_string();
         let arg = |k: &str| req.get(k).and_then(Value::as_str).unwrap_or("").to_string();
 
-        // `get` reaches the network, so it resolves under the lock, downloads WITHOUT it,
-        // and only then rejoins — holding the state lock across a download would freeze
-        // the window for the length of a file transfer.
-        let fetched: Option<Result<(String, String), String>> = if cmd == "get" {
-            let target = {
-                let s = self.state.lock().await;
-                s.corpus().and_then(|c| {
-                    crate::index::resolve(c, &arg("id"))
-                        .map(|(_, d)| (d.id.clone(), d.url.clone(), provision::text_base(Some(c))))
-                })
-            };
-            Some(match target {
-                Some((id, url, base)) => provision::fetch_form_text(CLI, &base, &id)
-                    .map(|text| (text, url))
-                    .map_err(|e| e.to_string()),
-                None => Err(format!("no form matches `{}`", arg("id"))),
-            })
-        } else {
-            None
+        // The verbs whose whole job is a network round trip answer on their own.
+        let networked = match cmd.as_str() {
+            "get" => Some(self.get(&arg("id")).await),
+            "sync" => Some(self.sync(&by).await),
+            _ => None,
         };
 
-        // Announce the search BEFORE embedding it. Embedding is the slow step, and without
-        // this the window learns a search happened only once it has finished — so an
-        // agent's search is invisible while it is the thing actually happening. Pushed on
-        // its own so the human sees "running…" against the right person's name.
+        // Announce the search BEFORE embedding it: embedding is the slow step, and an
+        // agent's search should be visible while it is the thing actually happening.
         if cmd == "search" {
-            let snap = {
+            {
                 let mut s = self.state.lock().await;
                 s.begin_search(&arg("query"), &by);
-                s.agents = self.control.roster();
-                clappkit::snapshot::with_rev(s.snapshot())
-            };
-            if let Some(h) = APP.get() {
-                kit::push_state(h, snap);
             }
+            self.push().await;
         }
 
-        // Embedding must happen OUTSIDE the state lock — it is the one slow step here.
+        // Embedding happens OUTSIDE the state lock — it is the one slow local step.
         let qvec = match cmd.as_str() {
             "search" => self.embed(&arg("query")).await,
-            "sort" => {
+            "sort" | "filter" => {
                 let q = self.state.lock().await.query().to_string();
                 if q.is_empty() { None } else { self.embed(&q).await }
             }
             _ => None,
         };
 
-        let mut state = self.state.lock().await;
-        let mut resp = match cmd.as_str() {
-            "state" | "status" => json!({ "ok": true }),
-            "search" => {
-                let emits = state.search(&arg("query"), qvec.as_deref(), &by);
-                self.control.emit_all(emits);
-                json!({ "ok": true })
-            }
-            "open" => match state.open(&arg("id"), &by) {
-                Ok(emits) => {
-                    self.control.emit_all(emits);
-                    json!({ "ok": true })
+        let mut then = Then::Nothing;
+        let resp = {
+            let mut state = self.state.lock().await;
+            match cmd.as_str() {
+                "state" | "status" => json!({ "ok": true }),
+                "search" => {
+                    let applied = match req.get("filter") {
+                        Some(f) => parse_filter(f, state.filter()).map(|flt| state.put_filter(flt, &by)),
+                        None => Ok(()),
+                    };
+                    match applied {
+                        Err(e) => json!({ "ok": false, "error": e }),
+                        Ok(()) => {
+                            let emits = state.search(&arg("query"), qvec.as_deref(), &by);
+                            self.control.emit_all(emits);
+                            then = Then::CheckRows(state.top_ids(LIVE_TOP));
+                            json!({ "ok": true })
+                        }
+                    }
                 }
-                Err(e) => json!({ "ok": false, "error": e }),
-            },
-            "save" => match state.save(&arg("id"), &by) {
-                Ok(emits) => {
-                    self.control.emit_all(emits);
-                    json!({ "ok": true })
-                }
-                Err(e) => json!({ "ok": false, "error": e }),
-            },
-            "unsave" => match state.unsave(&arg("id"), &by) {
-                Ok(emits) => {
-                    self.control.emit_all(emits);
-                    json!({ "ok": true })
-                }
-                Err(e) => json!({ "ok": false, "error": e }),
-            },
-            "sort" => match crate::index::Sort::parse(&arg("by")) {
-                Some(s) => {
-                    let emits = state.set_sort(s, qvec.as_deref(), &by);
-                    self.control.emit_all(emits);
-                    json!({ "ok": true })
-                }
-                None => json!({ "ok": false, "error": "sort by relevance, code or title" }),
-            },
-            "get" => match fetched.expect("computed above for this verb") {
-                Ok((text, url)) => json!({ "ok": true, "text": text, "url": url }),
-                Err(e) => json!({ "ok": false, "error": e }),
-            },
-            "sync" => {
-                match APP.get() {
-                    Some(handle) => {
-                        // Force: `sync` is both "is there a newer index?" and the retry
-                        // for a step that failed, so it re-runs rather than short-circuits.
-                        spawn_provisioning(self_arc(), handle.clone(), true);
-                        state.note_action(&by, "sync", "");
+                "filter" => match parse_filter(&req["filter"], state.filter()) {
+                    Ok(f) => {
+                        let emits = state.set_filter(f, qvec.as_deref(), &by);
+                        self.control.emit_all(emits);
                         json!({ "ok": true })
                     }
-                    None => json!({ "ok": false, "error": "the window is not up yet" }),
+                    Err(e) => json!({ "ok": false, "error": e }),
+                },
+                "open" => match state.open(&arg("id"), &by) {
+                    Ok(emits) => {
+                        self.control.emit_all(emits);
+                        if let Some(id) = state.open_doc().map(|d| d.id.clone()) {
+                            then = if req["wait"] == true { Then::CheckNow(id) } else { Then::CheckLater(vec![id]) };
+                        }
+                        json!({ "ok": true })
+                    }
+                    Err(e) => json!({ "ok": false, "error": e }),
+                },
+                "save" | "unsave" => {
+                    let done = if cmd == "save" { state.save(&arg("id"), &by) } else { state.unsave(&arg("id"), &by) };
+                    match done {
+                        Ok(saved) => {
+                            self.control.emit_all(saved.emits);
+                            json!({ "ok": true, "id": saved.id, "label": saved.label, "already": saved.already })
+                        }
+                        Err(e) => json!({ "ok": false, "error": e }),
+                    }
                 }
+                "sort" => match crate::index::Sort::parse(&arg("by")) {
+                    Some(s) => {
+                        let emits = state.set_sort(s, qvec.as_deref(), &by);
+                        self.control.emit_all(emits);
+                        json!({ "ok": true })
+                    }
+                    None => json!({ "ok": false, "error": "sort by relevance, code or title" }),
+                },
+                "get" | "sync" => networked.clone().expect("answered above for this verb"),
+                other => json!({ "ok": false, "error": format!("unknown command `{other}`") }),
             }
-            other => json!({ "ok": false, "error": format!("unknown command `{other}`") }),
         };
 
-        // The roster is read from the live pipe every time rather than cached: a rename
-        // arrives as a fresh snapshot and must update the label in place.
-        state.agents = self.control.roster();
-        let snapshot = clappkit::snapshot::with_rev(state.snapshot());
-        // The caller gets the snapshot too, so a CLI can print state without a second
-        // round trip.
+        match then {
+            Then::Nothing => {}
+            Then::CheckNow(id) => {
+                self.check_live(&id).await;
+            }
+            Then::CheckLater(ids) => spawn_live_checks(ids, None),
+            Then::CheckRows(ids) => {
+                let generation = SEARCH_GEN.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+                spawn_live_checks(ids, Some(generation));
+            }
+        }
+
+        let snapshot = self.snapshot().await;
+        let mut resp = resp;
+        // The caller gets the snapshot too, so a CLI can print state without a second trip.
         if let (Some(o), Some(s)) = (resp.as_object_mut(), snapshot.as_object()) {
             for (k, v) in s {
                 o.entry(k.clone()).or_insert_with(|| v.clone());
@@ -184,6 +205,249 @@ impl Core {
         }
         Reply::new(resp, snapshot)
     }
+
+    /// The snapshot both surfaces see, with the roster read fresh: a rename arrives as a new
+    /// roster and must relabel history in place.
+    async fn snapshot(&self) -> Value {
+        let mut s = self.state.lock().await;
+        s.agents = self.control.roster();
+        clappkit::snapshot::with_rev(s.snapshot())
+    }
+
+    async fn push(&self) {
+        if let Some(h) = APP.get() {
+            let snap = self.snapshot().await;
+            kit::push_state(h, snap);
+        }
+    }
+
+    /// `get`: a document's full text as Markdown, headed by what it is and by what the
+    /// university's site says about it. Resolved under the lock; fetched and checked
+    /// without it, concurrently, because the agent is waiting on both.
+    async fn get(&self, needle: &str) -> Value {
+        let target = {
+            let s = self.state.lock().await;
+            s.resolve(needle).map(|i| {
+                let c = s.corpus().expect("resolve succeeded, so a corpus is loaded");
+                (c.docs()[i].clone(), s.meta(i).cloned().unwrap_or_default(), provision::text_base(Some(c)))
+            })
+        };
+        let (doc, meta, base) = match target {
+            Ok(t) => t,
+            Err(e) => return json!({ "ok": false, "error": e }),
+        };
+        let id = doc.id.clone();
+        let fetch = tokio::task::spawn_blocking({
+            let id = id.clone();
+            move || provision::fetch_form_text(CLI, &base, &id)
+        });
+        let (text, live) = tokio::join!(fetch, self.check_live(&id));
+        match text {
+            Ok(Ok(body)) => json!({
+                "ok": true,
+                "id": id,
+                "url": doc.url,
+                "text": crate::text::markdown(&doc, &meta, live.as_ref(), &body),
+                "liveText": live.as_ref().map(Live::sentence),
+            }),
+            Ok(Err(e)) => json!({
+                "ok": false,
+                "error": format!("could not fetch the full text of {}: {e:#}. Read it at the source: {}", label(&doc), doc.url),
+                "url": doc.url,
+            }),
+            Err(e) => json!({ "ok": false, "error": format!("the text fetch stopped unexpectedly: {e}") }),
+        }
+    }
+
+    /// What the university's site says about one document — from the cache when that is
+    /// fresh, otherwise asked now. `None` only when the document is not in the corpus.
+    async fn check_live(&self, id: &str) -> Option<Live> {
+        let (doc, built): (Doc, String) = {
+            let s = self.state.lock().await;
+            if let Some(l) = s.live(id).filter(|l| is_fresh(l)) {
+                return Some(l.clone());
+            }
+            let c = s.corpus()?;
+            (c.docs().iter().find(|d| d.id == id)?.clone(), c.header.built.clone())
+        };
+        let status = tokio::task::spawn_blocking(move || live::check(&doc, &built, &live::head))
+            .await
+            .unwrap_or_else(|e| live::Status::Unknown { reason: e.to_string() });
+        let l = Live { status, checked_at: util::now_iso() };
+        self.state.lock().await.set_live(id, l.clone());
+        Some(l)
+    }
+
+    /// `sync`: a definitive answer to "is a newer archive published?", and the retry for a
+    /// search model that failed to load.
+    async fn sync(&self, by: &By) -> Value {
+        let (url, have) = {
+            let mut s = self.state.lock().await;
+            s.note_action(by, "sync", "");
+            s.syncing = true;
+            (provision::update_url(s.corpus()), s.corpus().map(|c| c.header.built.clone()))
+        };
+        self.push().await;
+
+        // Progress crosses from the blocking download to the window on a channel.
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<u8>();
+        let forward = tauri::async_runtime::spawn(async move {
+            let core = self_arc();
+            while let Some(p) = rx.recv().await {
+                core.state.lock().await.provision.index = Stage::Downloading { percent: p };
+                core.push().await;
+            }
+        });
+        let result = tokio::task::spawn_blocking({
+            let (url, have) = (url.clone(), have.clone());
+            move || provision::sync_index(CLI, &url, have.as_deref(), move |p| {
+                let _ = tx.send(p);
+            })
+        })
+        .await;
+        let _ = forward.await;
+
+        let checked_at = util::now_iso();
+        let info = match result {
+            Ok(Ok(Synced::Current { remote })) => SyncInfo {
+                checked_at,
+                outcome: SyncOutcome::Current,
+                built: have.clone(),
+                remote_built: Some(remote),
+                error: None,
+            },
+            Ok(Ok(Synced::Updated { remote, corpus })) => {
+                let built = corpus.header.built.clone();
+                self.install(*corpus).await;
+                SyncInfo { checked_at, outcome: SyncOutcome::Updated, built: Some(built), remote_built: Some(remote), error: None }
+            }
+            Ok(Err(e)) => SyncInfo {
+                checked_at,
+                outcome: SyncOutcome::Failed,
+                built: have.clone(),
+                remote_built: None,
+                error: Some(format!("{e:#}")),
+            },
+            Err(e) => SyncInfo {
+                checked_at,
+                outcome: SyncOutcome::Failed,
+                built: have.clone(),
+                remote_built: None,
+                error: Some(e.to_string()),
+            },
+        };
+        let record = info.clone();
+        let _ = tokio::task::spawn_blocking(move || provision::save_sync(CLI, &record)).await;
+
+        let retry_model = {
+            let mut s = self.state.lock().await;
+            s.set_sync(info.clone());
+            s.syncing = false;
+            s.provision.index = match (&info.outcome, s.corpus().is_some()) {
+                (_, true) => Stage::Ready,
+                (SyncOutcome::Failed, false) => Stage::Failed { reason: info.error.clone().unwrap_or_default() },
+                _ => Stage::Missing,
+            };
+            matches!(s.provision.model, Stage::Failed { .. })
+        };
+        // `sync` is the window's one "try again": a model that failed to load is retried.
+        if retry_model {
+            spawn_model();
+        }
+
+        match info.outcome {
+            SyncOutcome::Failed => json!({
+                "ok": false,
+                "error": format!("could not check for a newer archive: {}", info.error.clone().unwrap_or_default()),
+                "sync": info,
+            }),
+            _ => json!({ "ok": true, "sync": info }),
+        }
+    }
+
+    /// Put a corpus in place and bring the screen along: the open document is kept by id,
+    /// and the query on screen is searched again against the new documents.
+    async fn install(&self, corpus: Corpus) {
+        let query = {
+            let mut s = self.state.lock().await;
+            s.attach(corpus);
+            s.provision.index = Stage::Ready;
+            s.query().to_string()
+        };
+        if !query.is_empty() {
+            let qvec = self.embed(&query).await;
+            self.state.lock().await.refresh(qvec.as_deref());
+        }
+    }
+}
+
+fn label(d: &Doc) -> String {
+    format!("{} {}", d.code.clone().unwrap_or_default(), d.title).trim().to_string()
+}
+
+/// A site check is reused while it is recent. "Could not ask" is never reused: the next
+/// look should ask again.
+fn is_fresh(l: &Live) -> bool {
+    if matches!(l.status, live::Status::Unknown { .. }) {
+        return false;
+    }
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    l.checked_at >= util::iso_from_unix(now.saturating_sub(LIVE_TTL_SECS))
+}
+
+/// A filter as a surface sends it: `"clear"`, or an object whose fields set — and whose
+/// empty strings unset — one dimension each. A field not mentioned keeps its value.
+fn parse_filter(v: &Value, current: &Filter) -> Result<Filter, String> {
+    if v.as_str() == Some("clear") {
+        return Ok(Filter::default());
+    }
+    let obj = v.as_object().ok_or("a filter is an object, or \"clear\"")?;
+    let mut f = current.clone();
+    if let Some(t) = obj.get("type").and_then(Value::as_str) {
+        let t = t.trim();
+        f.collection = (!t.is_empty()).then(|| t.to_string());
+    }
+    if let Some(l) = obj.get("level").and_then(Value::as_str) {
+        f.level = match l.trim() {
+            "" => None,
+            other => Some(Level::parse(other).ok_or_else(|| format!("level is lisans or lisansustu, not `{other}`"))?),
+        };
+    }
+    if let Some(l) = obj.get("lang").and_then(Value::as_str) {
+        f.lang = match l.trim().to_lowercase().as_str() {
+            "" => None,
+            code @ ("tr" | "en") => Some(code.to_string()),
+            other => return Err(format!("lang is tr or en, not `{other}`")),
+        };
+    }
+    Ok(f)
+}
+
+/// Ask the site about these documents in the background, publishing each answer as it lands.
+/// With a search generation, wait for the search to stand first, and drop the work if a
+/// newer search has replaced it.
+fn spawn_live_checks(ids: Vec<String>, generation: Option<u64>) {
+    if ids.is_empty() {
+        return;
+    }
+    tauri::async_runtime::spawn(async move {
+        if let Some(g) = generation {
+            tokio::time::sleep(std::time::Duration::from_millis(LIVE_SETTLE_MS)).await;
+            if SEARCH_GEN.load(std::sync::atomic::Ordering::SeqCst) != g {
+                return;
+            }
+        }
+        let mut set = tokio::task::JoinSet::new();
+        for id in ids {
+            set.spawn(async move {
+                let core = self_arc();
+                core.check_live(&id).await
+            });
+        }
+        while set.join_next().await.is_some() {
+            self_arc().push().await;
+        }
+    });
 }
 
 #[tauri::command]
@@ -202,29 +466,24 @@ fn asset(core: tauri::State<'_, Arc<Core>>, path: String) -> Option<String> {
     kit::avatar_uri(&path, &core.control)
 }
 
-/// Open a form on the university's own site, in the user's real browser.
+/// Open a document on the university's own site, in the user's real browser.
 ///
 /// A plain `<a target="_blank">` does nothing in a Tauri window: WebView2 raises
-/// `NewWindowRequested` and, with no handler, the click is swallowed. So the one link this
-/// app has must travel through the core.
+/// `NewWindowRequested` and, with no handler, the click is swallowed. So the link travels
+/// through the core, with two constraints, because this hands a string to the OS:
 ///
-/// Two constraints, because this hands a string to the operating system's URL handler:
-///
-/// * **`https` only.** Not a formality — `file:`, `javascript:` and the various shell
-///   schemes are exactly what a URL opener is abused for, and every URL we legitimately
-///   open comes from our own index and is an `https://www.gtu.edu.tr/...` link.
+/// * **`https` only.** `file:`, `javascript:` and the shell schemes are exactly what a URL
+///   opener is abused for, and every URL this app opens is an `https://` link.
 /// * **No shell.** `cmd /C start` would parse `&` and `|` out of the URL; `rundll32
-///   url.dll,FileProtocolHandler` takes the URL as one argument and no shell sees it.
+///   url.dll,FileProtocolHandler` takes it as one argument and no shell sees it.
 #[tauri::command]
 fn open_url(url: String) -> Result<(), String> {
     if !url.starts_with("https://") {
         return Err(format!("refusing to open a non-https URL: {url}"));
     }
-    // Percent-encode before handing it over. Almost every URL in this corpus contains
-    // spaces and Turkish letters — `.../FR-0083 YL-DR Danışman Değişikliği Formu R1.pdf` —
-    // and a URL handler that receives a raw space treats what follows as another argument.
-    // Encoding the whole set at once is why this is done here rather than left to callers.
-    let encoded = encode_url(&url);
+    // Almost every URL here carries spaces and Turkish letters, and a URL handler that
+    // receives a raw space treats what follows as another argument.
+    let encoded = util::encode_url(&url);
     let spawned = if cfg!(target_os = "windows") {
         std::process::Command::new("rundll32")
             .args(["url.dll,FileProtocolHandler", &encoded])
@@ -234,160 +493,123 @@ fn open_url(url: String) -> Result<(), String> {
     } else {
         std::process::Command::new("xdg-open").arg(&encoded).spawn()
     };
-    spawned
-        .map(|_| ())
-        .map_err(|e| format!("cannot open the browser: {e}"))
-}
-
-/// Percent-encode everything a URL may not carry literally, leaving the characters that
-/// are structural (`:/?#[]@` and the sub-delimiters) alone — and leaving `%` alone so a
-/// URL that is already encoded is not double-encoded into nonsense.
-fn encode_url(url: &str) -> String {
-    const KEEP: &str = "-._~:/?#[]@!$&'()*+,;=%";
-    let mut out = String::with_capacity(url.len());
-    for ch in url.chars() {
-        if ch.is_ascii_alphanumeric() || KEEP.contains(ch) {
-            out.push(ch);
-        } else {
-            let mut buf = [0u8; 4];
-            for b in ch.encode_utf8(&mut buf).as_bytes() {
-                out.push_str(&format!("%{b:02X}"));
-            }
-        }
-    }
-    out
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_real_form_url_survives_encoding() {
-        // Every character that broke this: a space, and four Turkish letters.
-        let raw = "https://www.gtu.edu.tr/fileman/Formlar-Türkçe/FR-0083 Danışman Değişikliği Formu R1.pdf";
-        let got = encode_url(raw);
-        assert!(!got.contains(' '), "a space reaching the URL handler splits the argument");
-        assert!(got.starts_with("https://www.gtu.edu.tr/fileman/"), "{got}");
-        assert!(got.ends_with("R1.pdf"), "{got}");
-        assert!(got.contains("%20"), "{got}");
-        assert!(!got.contains('ü') && !got.contains('ç'), "{got}");
-    }
-
-    #[test]
-    fn an_already_encoded_url_is_not_encoded_twice() {
-        // `%` is preserved, so %20 stays %20 rather than becoming %2520.
-        let once = encode_url("https://x.invalid/a%20b");
-        assert_eq!(once, "https://x.invalid/a%20b");
-        assert_eq!(encode_url(&once), once, "encoding must be idempotent");
-    }
-
-    #[test]
-    fn query_structure_is_left_alone() {
-        let u = "https://x.invalid/p?a=1&b=2#frag";
-        assert_eq!(encode_url(u), u);
-    }
+    spawned.map(|_| ()).map_err(|e| format!("cannot open the browser: {e}"))
 }
 
 /// What the provisioning worker reports back as it goes.
 enum Prov {
     IndexStage(Stage),
-    IndexReady(Box<crate::corpus::Corpus>),
+    IndexReady(Box<Corpus>),
     ModelStage(Stage),
     ModelReady(Box<crate::embed::Embedder>),
 }
 
-/// Provision in the background: load whatever is already cached, then fetch what is not.
-/// Every step pushes a snapshot, because this is the one part of the app the human waits on.
-///
-/// The shape matters. Downloading and reading 450 MB is *blocking* work, so it belongs on
-/// a blocking thread — but a plain `std::thread` has no Tokio context, and the first
-/// version of this called `Handle::current()` inside one. That panics immediately, and the
-/// only symptom is an app that runs perfectly and is permanently "not provisioned": the
-/// window opens, the CLI answers, and nothing ever loads. So: an async task owns the
-/// state, a `spawn_blocking` worker owns the I/O, and progress crosses between them on a
-/// channel instead of a runtime handle.
-fn spawn_provisioning(core: Arc<Core>, app: tauri::AppHandle, force: bool) {
-    tauri::async_runtime::spawn(async move {
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Prov>();
+/// Apply one provisioning message, then show it.
+async fn handle(core: &Core, msg: Prov) {
+    match msg {
+        Prov::IndexStage(st) => core.state.lock().await.provision.index = st,
+        Prov::IndexReady(c) => core.install(*c).await,
+        Prov::ModelStage(st) => core.state.lock().await.provision.model = st,
+        Prov::ModelReady(e) => {
+            *core.embedder.lock().await = Some(*e);
+            let query = {
+                let mut s = core.state.lock().await;
+                s.provision.model = Stage::Ready;
+                s.query().to_string()
+            };
+            // A search typed while the model loaded was answered lexically. Now that meaning
+            // is available, the same query is answered again with it.
+            if !query.is_empty() {
+                let qvec = core.embed(&query).await;
+                core.state.lock().await.refresh(qvec.as_deref());
+            }
+        }
+    }
+    core.push().await;
+}
 
-        let worker = tokio::task::spawn_blocking(move || {
-            // The index first: it is small, and a lexical search working within seconds
-            // beats a blank window that is technically busy. The best local copy loads
-            // unconditionally; `sync` (force) then asks the index's own update URL for
-            // something newer and installs it only if it IS newer.
-            let local = provision::load_cached_index(CLI);
-            let (url, have) = (
-                provision::update_url(local.as_ref()),
-                local.as_ref().map(|c| c.header.built.clone()),
-            );
-            if let Some(c) = local {
+/// Load the search model, downloading it first when no copy exists, and warm it.
+///
+/// The first encode pays for faulting half a gigabyte of weights in, which is what made
+/// the first search of a session take twenty seconds. It is paid here instead, while the
+/// window says "loading".
+fn provision_model(tx: &UnboundedSender<Prov>) {
+    let fetched = if provision::model_present(CLI) {
+        Ok(())
+    } else {
+        provision::fetch_model(CLI, |st| {
+            if matches!(st, Stage::Downloading { .. }) {
+                let _ = tx.send(Prov::ModelStage(st));
+            }
+        })
+    };
+    let _ = tx.send(Prov::ModelStage(Stage::Loading));
+    let loaded = fetched
+        .and_then(|_| crate::embed::Embedder::load(&provision::model_dir(CLI)))
+        .and_then(|e| e.query("hazırlık").map(|_| e));
+    let _ = tx.send(match loaded {
+        Ok(e) => Prov::ModelReady(Box::new(e)),
+        Err(e) => Prov::ModelStage(Stage::Failed { reason: format!("{e:#}") }),
+    });
+}
+
+/// Run a provisioning job on a blocking thread and apply what it reports.
+///
+/// A plain `std::thread` has no Tokio context, and the first version of this called
+/// `Handle::current()` inside one — which panics, leaving an app that runs perfectly and is
+/// permanently "not provisioned". So: an async task owns the state, a `spawn_blocking`
+/// worker owns the I/O, and progress crosses between them on a channel.
+fn spawn_job(job: impl FnOnce(UnboundedSender<Prov>) + Send + 'static) {
+    tauri::async_runtime::spawn(async move {
+        let core = self_arc();
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Prov>();
+        let worker = tokio::task::spawn_blocking(move || job(tx));
+        while let Some(msg) = rx.recv().await {
+            handle(&core, msg).await;
+        }
+        if let Err(e) = worker.await {
+            eprintln!("{CLI}: the provisioning worker died: {e}");
+        }
+    });
+}
+
+/// Startup: the index first — it is small, and a lexical search within seconds beats a
+/// blank window that is technically busy — then the model.
+fn spawn_provisioning() {
+    tauri::async_runtime::spawn(async {
+        let core = self_arc();
+        if let Ok(Some(info)) = tokio::task::spawn_blocking(|| provision::load_sync(CLI)).await {
+            core.state.lock().await.set_sync(info);
+        }
+    });
+    spawn_job(|tx| {
+        match provision::load_cached_index(CLI) {
+            Some(c) => {
                 let _ = tx.send(Prov::IndexReady(Box::new(c)));
             }
-            if force || have.is_none() {
+            None => {
+                let url = provision::update_url(None);
                 let progress = tx.clone();
-                match provision::fetch_index(CLI, &url, have.as_deref(), move |st| {
+                match provision::fetch_index(CLI, &url, None, move |st| {
                     let _ = progress.send(Prov::IndexStage(st));
                 }) {
                     Ok(Some(c)) => {
                         let _ = tx.send(Prov::IndexReady(Box::new(c)));
                     }
-                    Ok(None) => {
-                        eprintln!("{CLI}: the index is already current ({})", have.as_deref().unwrap_or("?"));
-                        let _ = tx.send(Prov::IndexStage(Stage::Ready));
-                    }
+                    Ok(None) => {}
                     Err(e) => {
-                        let _ = tx.send(Prov::IndexStage(Stage::Failed { reason: e.to_string() }));
+                        let _ = tx.send(Prov::IndexStage(Stage::Failed { reason: format!("{e:#}") }));
                     }
                 }
             }
-
-            // Then the model — 450 MB, so it is deliberately last. Read from wherever a
-            // usable copy already is (a launcher's shared store first); downloaded only
-            // into our own directory, and only when no candidate holds one.
-            let fetched = if provision::model_present(CLI) {
-                Ok(())
-            } else {
-                let progress = tx.clone();
-                provision::fetch_model(CLI, move |st| {
-                    let _ = progress.send(Prov::ModelStage(st));
-                })
-            };
-            match fetched.and_then(|_| crate::embed::Embedder::load(&provision::model_dir(CLI))) {
-                Ok(e) => {
-                    let _ = tx.send(Prov::ModelReady(Box::new(e)));
-                }
-                Err(e) => {
-                    let _ = tx.send(Prov::ModelStage(Stage::Failed { reason: e.to_string() }));
-                }
-            }
-        });
-
-        while let Some(msg) = rx.recv().await {
-            match msg {
-                Prov::IndexStage(st) => core.state.lock().await.provision.index = st,
-                Prov::IndexReady(c) => {
-                    let mut s = core.state.lock().await;
-                    s.attach(*c);
-                    s.provision.index = Stage::Ready;
-                }
-                Prov::ModelStage(st) => core.state.lock().await.provision.model = st,
-                Prov::ModelReady(e) => {
-                    *core.embedder.lock().await = Some(*e);
-                    core.state.lock().await.provision.model = Stage::Ready;
-                }
-            }
-            let snap = {
-                let s = core.state.lock().await;
-                clappkit::snapshot::with_rev(s.snapshot())
-            };
-            kit::push_state(&app, snap);
         }
-
-        if let Err(e) = worker.await {
-            eprintln!("{CLI}: the provisioning worker died: {e}");
-        }
+        provision_model(&tx);
     });
+}
+
+/// Retry only the model.
+fn spawn_model() {
+    spawn_job(|tx| provision_model(&tx));
 }
 
 /// The GUI entry point. Owns the main thread — on macOS the window server accepts nothing
@@ -414,12 +636,12 @@ pub fn run() {
             kit::apply_icon(&handle, ICON);
 
             let ipc_core = core.clone();
-            kit::spawn_ipc(handle.clone(), CLI, policy, move |req, caller| {
+            kit::spawn_ipc(handle, CLI, policy, move |req, caller| {
                 let core = ipc_core.clone();
                 async move { core.apply(req, caller).await }
             });
 
-            spawn_provisioning(core.clone(), handle, false);
+            spawn_provisioning();
             Ok(())
         })
         .run(tauri::generate_context!())

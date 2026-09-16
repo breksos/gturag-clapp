@@ -16,8 +16,13 @@ mod cli;
 mod corpus;
 mod embed;
 mod index;
+mod lexicon;
+mod live;
+mod meta;
 mod provision;
 mod state;
+mod text;
+mod util;
 
 /// The app's identity, read from `clatch.json` by `build.rs`. Not constants: a fork of
 /// this engine changes the manifest and rebuilds, and nothing here has to know.

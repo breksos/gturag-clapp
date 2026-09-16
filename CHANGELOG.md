@@ -4,6 +4,44 @@
 break: SemVer 0.x rules. Versions before 0.1.5 were not recorded here; their notes are the
 GitHub releases.
 
+## [0.1.6] - 2026-09-17
+
+The fixes a graduate student's week with the app asked for.
+
+### Fixed
+- `get` works for every document whose code has a Turkish letter. The id was filtered to
+  ASCII before it was fetched, so `İA-0021` asked for `A-0021`, and every İA, YÖ and KİDR
+  document had no full text.
+- `IA-0021`, `ia-0021`, `YO-0054` and `yö-54` find their documents: codes are compared with
+  Turkish letters folded to ASCII, and a full id is found however it is cased.
+- A document's revision is the one it prints about itself. `İA-0021` said R0, from a file
+  name with no revision in it; its own header says revision 1 of 10 June 2024.
+- `sync` gives a definitive answer — up to date with both dates, updated, or could not check
+  — instead of "ready". It no longer reloads the index it already has, so the results on
+  screen stay, and a newer index re-runs the query on screen.
+- The first search of a session no longer waits twenty seconds: the model is warmed while
+  the window says it is loading.
+- Saving a saved document says it was already in the list.
+- A long question no longer ranks worse than a short one: filler words are dropped, and the
+  education level it names is a preference, so `yüksek lisansta tez danışmanımı değiştirmek
+  istiyorum` puts the graduate advisor-change form first, and `staj başvurusu` finds the
+  internship documents rather than every other application.
+- XML entities (`&amp;`) no longer reach the text of 153 documents, and a Word hyperlink
+  keeps its target.
+
+### Added
+- A freshness check against the university's site when a document is opened or fetched: an
+  out-of-date copy says so, with the current file's address.
+- Each result's collection, revision and date, unit and level, in both surfaces; `open`
+  prints where the document matched.
+- A note above the results when a question is outside the archive (calendars, meeting days,
+  announcements) or nothing matches well.
+- English questions are matched through a glossary of this domain, and say so.
+- `open`, `get`, `save` and `unsave` take the row number of a result on screen.
+- Filters by collection, level and language: `search --type/--level/--lang/--all`, and in
+  the window's toolbar.
+- `get` prints Markdown: a header of facts, then the text without page furniture.
+
 ## [0.1.5] - 2026-09-14
 
 ### Changed

@@ -23,6 +23,8 @@
 
 use crate::corpus::{Corpus, Doc};
 use crate::embed::cosine;
+use crate::lexicon::Analysis;
+use crate::meta::{Level, Meta};
 use std::collections::HashMap;
 
 /// RRF's smoothing constant. 60 is the value from the original paper and the one every
@@ -52,6 +54,60 @@ const CANDIDATES: usize = 200;
 /// contains every term of the query cannot be outvoted by any amount of that — while a
 /// quarter-covered title (0.20 × 0.25² = 0.0125) stays below it, as it should.
 const TITLE_WEIGHT: f32 = 0.20;
+
+/// What the education level a query names does to a document's fused score. A preference,
+/// not a filter: a graduate student asking about excused registration wants the graduate
+/// form first, and the undergraduate one that shares more of the question's words should
+/// fall below it without disappearing.
+const LEVEL_MATCH: f32 = 1.3;
+/// How much a document-kind word (`başvuru`, `form`) counts toward title coverage, against a
+/// topic word's 1.0. See [`crate::lexicon::is_generic`].
+const GENERIC_WEIGHT: f32 = 0.45;
+const LEVEL_MISMATCH: f32 = 0.35;
+
+/// How strongly the best evidence matched. Low on both counts, the results are the nearest
+/// things the archive has, not an answer, and both surfaces say so.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Confidence {
+    /// The best title coverage any document reached, 0..1.
+    pub title: f32,
+    /// The same, but a word no title contains counts against it instead of being dropped:
+    /// `kampüs wifi şifresi` is fully "covered" by a campus title once `wifi` and `şifresi`
+    /// are set aside, and that is exactly the question this archive cannot answer.
+    pub strict: f32,
+    /// The best passage cosine, when the model ran.
+    pub dense: Option<f32>,
+}
+
+/// Which documents a search may return. Shared state, like the sort. A named code is never
+/// filtered out: it is an answer the person asked for by name.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
+pub struct Filter {
+    pub lang: Option<String>,
+    pub level: Option<Level>,
+    /// A collection (`İş Akışları`) or a code family (`İA`), compared folded and by prefix.
+    #[serde(rename = "type")]
+    pub collection: Option<String>,
+}
+
+impl Filter {
+    fn admits(&self, doc: &Doc, level: Option<Level>, collection: Option<&str>) -> bool {
+        if self.lang.as_deref().is_some_and(|l| doc.lang != l) {
+            return false;
+        }
+        if self.level.is_some_and(|want| level != Some(want)) {
+            return false;
+        }
+        if let Some(want) = self.collection.as_deref().map(code_fold) {
+            let by_collection = collection.is_some_and(|c| code_fold(c).starts_with(&want));
+            let by_family = doc.code.as_deref().is_some_and(|c| code_prefix(&code_key(c)) == want);
+            if !(by_collection || by_family) {
+                return false;
+            }
+        }
+        true
+    }
+}
 
 /// Why a document is in the results — shown in both surfaces, because "it matched the
 /// code you typed" and "it looked similar" deserve different trust.
@@ -162,6 +218,11 @@ pub fn tokenize_grouped(text: &str) -> Vec<Vec<String>> {
                 group.push(s);
             }
         }
+        if let Some(base) = alternation(raw) {
+            group.push(base.to_string());
+            group.push(ascii_fold(base));
+            group.dedup();
+        }
         out.push(group);
     }
     out
@@ -199,6 +260,13 @@ pub fn tokenize(text: &str) -> Vec<String> {
                 out.push(s);
             }
         }
+        if let Some(base) = alternation(raw) {
+            out.push(base.to_string());
+            let flat = ascii_fold(base);
+            if flat != base {
+                out.push(flat);
+            }
+        }
     }
     out
 }
@@ -209,7 +277,7 @@ pub fn tokenize(text: &str) -> Vec<String> {
 /// This is a MATCHING aid, never a display one — nothing folded is ever shown to a human,
 /// because `Talimati` is a misspelling of `Talimatı` and we should not be the ones making
 /// it.
-fn ascii_fold(word: &str) -> String {
+pub(crate) fn ascii_fold(word: &str) -> String {
     word.chars()
         .map(|c| match c {
             'ç' => 'c',
@@ -221,6 +289,25 @@ fn ascii_fold(word: &str) -> String {
             other => other,
         })
         .collect()
+}
+
+/// The one fold document codes and ids are compared in: Turkish lowercase, then ASCII.
+/// `İA`, `IA`, `ia` and `ıa` are the same family; so are `YÖ` and `YO`. The register writes
+/// its codes with Turkish capitals and people type them without, and an ASCII `I` that
+/// Turkish lowercases to `ı` must still find `İA`.
+pub fn code_fold(text: &str) -> String {
+    ascii_fold(&tr_fold(text))
+}
+
+/// Turkish drops a vowel or softens a consonant before a suffix (`kayıt` → `kaydı`, `izin`
+/// → `izni`), which a fixed-length stem cannot bridge. The few such words this registry is
+/// full of are named here, and the base form is indexed beside the suffixed one.
+fn alternation(word: &str) -> Option<&'static str> {
+    const PAIRS: &[(&str, &str)] = &[("kayd", "kayıt"), ("izn", "izin"), ("ism", "isim"), ("redd", "ret")];
+    PAIRS
+        .iter()
+        .find(|(prefix, _)| word.len() > prefix.len() && word.starts_with(prefix))
+        .map(|(_, base)| *base)
 }
 
 /// How many characters of a word survive stemming. Turkish IR gets most of the benefit of
@@ -247,7 +334,7 @@ fn stem(word: &str) -> Option<String> {
 /// `FR-83` → `fr-0083`. Comparisons happen in this space and nowhere else, because the
 /// register's codes carry Turkish capitals (`YÖ`, `İA`) that no ASCII uppercase survives.
 pub fn code_key(code: &str) -> String {
-    let folded = tr_fold(code);
+    let folded = code_fold(code);
     let mut segs: Vec<String> = folded
         .split(|c: char| !c.is_alphanumeric())
         .filter(|s| !s.is_empty())
@@ -263,7 +350,7 @@ pub fn code_key(code: &str) -> String {
 
 /// The letter part of a code key — `isg-tl-0001` → `isg-tl` — used to learn which
 /// prefixes actually exist in the corpus.
-fn code_prefix(key: &str) -> String {
+pub(crate) fn code_prefix(key: &str) -> String {
     let segs: Vec<&str> = key.split('-').collect();
     match segs.split_last() {
         Some((last, rest)) if last.chars().all(|c| c.is_ascii_digit()) && !rest.is_empty() => {
@@ -285,7 +372,7 @@ pub fn find_code(
     prefixes: &std::collections::HashSet<String>,
     default_family: &str,
 ) -> Option<String> {
-    let b: Vec<char> = tr_fold(query).chars().collect();
+    let b: Vec<char> = code_fold(query).chars().collect();
     let is_sep = |c: char| c == '-' || c == '_' || c == ' ';
     let mut i = 0;
     while i < b.len() {
@@ -333,7 +420,7 @@ pub fn find_code(
     // A bare number, but only if the query is essentially just that number — "2 nüsha"
     // must not be read as FR-0002 — and only when the corpus has said which family a bare
     // number means. It is FR in a forms registry; the index does not assume.
-    let t = tr_fold(query);
+    let t = code_fold(query);
     let t = t.trim();
     if !default_family.is_empty()
         && t.len() >= 2 && t.len() <= 4 && t.chars().all(|c| c.is_ascii_digit())
@@ -427,10 +514,27 @@ impl Field {
     /// A word no title contains is dropped from the denominator entirely: nothing can cover
     /// `istiyorum`, and leaving it in deflates every score alike until the title signal
     /// stops outweighing the rank-fused ones.
-    fn coverage(&self, unit: usize, groups: &[Vec<String>]) -> f32 {
+    fn coverage(&self, unit: usize, groups: &[Vec<String>], reach: &[Vec<String>]) -> f32 {
+        self.weighted_coverage(unit, groups, reach, None)
+    }
+
+    /// [`Field::coverage`] with unachievable words counted at the rarest weight, except the
+    /// ones `skip` marks.
+    fn strict_coverage(&self, unit: usize, groups: &[Vec<String>], reach: &[Vec<String>], skip: &[bool]) -> f32 {
+        self.weighted_coverage(unit, groups, reach, Some(skip))
+    }
+
+    fn weighted_coverage(
+        &self,
+        unit: usize,
+        groups: &[Vec<String>],
+        reach: &[Vec<String>],
+        strict: Option<&[bool]>,
+    ) -> f32 {
         if groups.is_empty() {
             return 0.0;
         }
+        let rarest = (((self.n + 0.5) / 0.5) + 1.0).ln();
         let tf = &self.postings[unit];
         let idf_of = |t: &String| -> Option<f32> {
             let df = *self.doc_freq.get(t)? as f32;
@@ -440,7 +544,7 @@ impl Field {
         let mut hit = 0.0;
         let mut total = 0.0;
         let mut seen: Vec<&str> = Vec::new();
-        for group in groups {
+        for (g, group) in groups.iter().enumerate() {
             let key = group[0].as_str();
             if seen.contains(&key) {
                 continue;
@@ -448,13 +552,19 @@ impl Field {
             seen.push(key);
             // The word's weight is its rarest achievable spelling — the exact one when the
             // corpus has it, the folded one when the corpus only ever writes it folded.
-            let Some(idf) = group.iter().filter_map(&idf_of).fold(None, |acc: Option<f32>, v| {
+            if strict.is_some_and(|skip| skip.get(g).copied().unwrap_or(false)) {
+                continue;
+            }
+            let achievable = reach.get(g).unwrap_or(group).iter().filter_map(&idf_of).fold(None, |acc: Option<f32>, v| {
                 Some(acc.map_or(v, |a: f32| a.max(v)))
-            }) else {
+            });
+            let Some(idf) = achievable.or(strict.map(|_| rarest)) else {
                 continue; // unachievable: no title contains any spelling of this word
             };
+            let idf = if crate::lexicon::is_generic(key) { idf * GENERIC_WEIGHT } else { idf };
             total += idf;
-            if group.iter().any(|t| tf.contains_key(t)) {
+            // Hit by any spelling it can reach — its own, or a suffixed one (`stajı`).
+            if reach.get(g).unwrap_or(group).iter().any(|t| tf.contains_key(t)) {
                 hit += idf;
             }
         }
@@ -463,6 +573,28 @@ impl Field {
         } else {
             hit / total
         }
+    }
+
+    /// Each word's spellings, plus — for a four-letter word — the suffixed forms this field
+    /// actually contains. A five-letter stem cannot reach `stajı`, `stajyer` or `dersi` from
+    /// `staj` or `ders`, and eleven internship titles never say the bare word. Only up to
+    /// three extra letters: a Turkish suffix, not a different word (`formasyon`).
+    fn reach(&self, groups: &[Vec<String>]) -> Vec<Vec<String>> {
+        groups
+            .iter()
+            .map(|g| {
+                let mut out = g.clone();
+                for w in g.iter().filter(|w| w.chars().count() == 4 && w.chars().all(char::is_alphabetic)) {
+                    for t in self.doc_freq.keys() {
+                        let extra = t.chars().count().saturating_sub(4);
+                        if (1..=3).contains(&extra) && t.starts_with(w.as_str()) && !out.contains(t) {
+                            out.push(t.clone());
+                        }
+                    }
+                }
+                out
+            })
+            .collect()
     }
 
     /// Every unit with a non-zero score, best first, capped.
@@ -492,10 +624,13 @@ pub struct Index {
     /// What a bare number means — the corpus header's `default_family`, or its most common
     /// family when the header predates the field. Empty when the corpus carries no codes.
     default_family: String,
+    /// Each document's education level and collection, from [`crate::meta`].
+    levels: Vec<Option<Level>>,
+    collections: Vec<Option<String>>,
 }
 
 impl Index {
-    pub fn build(corpus: &Corpus) -> Index {
+    pub fn build(corpus: &Corpus, meta: &[Meta]) -> Index {
         // The code goes in with the title so `FR-0083` is findable as a WORD even when
         // `find_code` declines to read the query as naming a document. That happens
         // whenever a bare number is only PART of a longer question: `find_code` reads a
@@ -506,9 +641,13 @@ impl Index {
         let titles: Vec<String> = corpus
             .docs()
             .iter()
-            .map(|d| match &d.code {
-                Some(code) => format!("{code} {}", d.title),
-                None => d.title.clone(),
+            .map(|d| {
+                let mut t = match &d.code {
+                    Some(code) => format!("{code} {}", d.title),
+                    None => d.title.clone(),
+                };
+                t.push_str(&abbreviations(&d.title));
+                t
             })
             .collect();
         Index {
@@ -516,26 +655,34 @@ impl Index {
             title: Field::build(titles.iter().map(String::as_str)),
             prefixes: corpus_prefixes(corpus),
             default_family: default_family(corpus),
+            levels: (0..corpus.docs().len()).map(|i| meta.get(i).and_then(|m| m.level)).collect(),
+            collections: (0..corpus.docs().len()).map(|i| meta.get(i).and_then(|m| m.collection.clone())).collect(),
         }
     }
 
     /// Rank the corpus for one query. `query_vec` is `None` when the embedder has not
     /// finished provisioning — search still works, lexically, rather than refusing to
     /// answer at all.
+    #[allow(clippy::too_many_arguments)]
     pub fn search(
         &self,
         corpus: &Corpus,
         query: &str,
+        analysis: &Analysis,
         query_vec: Option<&[f32]>,
         sort: Sort,
+        filter: &Filter,
         limit: usize,
-    ) -> Vec<Hit> {
-        let terms = tokenize(query);
+    ) -> (Vec<Hit>, Confidence) {
+        // The lexical half scores the ANALYSED query (no level or filler words, and an English
+        // question's Turkish nouns); the code check and the dense half read what was typed.
+        let terms = tokenize(&analysis.lexical);
         // Coverage scores WORDS, so it needs the grouped expansion rather than the flat
         // term list BM25 uses.
-        let groups = tokenize_grouped(query);
+        let groups = tokenize_grouped(&analysis.lexical);
         let mut hits: Vec<Hit> = Vec::new();
         let mut placed: HashMap<usize, usize> = HashMap::new(); // doc → index into hits
+        let mut confidence = Confidence::default();
 
         // 1. An exact code wins outright.
         let code = find_code(query, &self.prefixes, &self.default_family);
@@ -570,7 +717,7 @@ impl Index {
             .as_ref()
             .is_some_and(|c| terms.iter().all(|t| is_part_of_code(t, c)));
         if bare_code {
-            return hits;
+            return (hits, confidence);
         }
 
         if !terms.is_empty() || query_vec.is_some() {
@@ -589,8 +736,16 @@ impl Index {
             // Coverage keeps the magnitude: full match 1.0, one-term-in-four 0.25. Squared,
             // so partial credit falls away fast, and scaled to dominate any realistic
             // accumulation of RRF contributions (two lists cap out around 0.033).
-            for (doc, _) in self.title.rank(&terms, CANDIDATES) {
-                let coverage = self.title.coverage(doc, &groups);
+            let reach = self.title.reach(&groups);
+            let title_terms: Vec<String> = reach.iter().flatten().cloned().collect();
+            let glossed: Vec<bool> = groups
+                .iter()
+                .map(|g| analysis.english && crate::lexicon::has_gloss(&g[0]))
+                .collect();
+            for (doc, _) in self.title.rank(&title_terms, CANDIDATES) {
+                let coverage = self.title.coverage(doc, &groups, &reach);
+                confidence.title = confidence.title.max(coverage);
+                confidence.strict = confidence.strict.max(self.title.strict_coverage(doc, &groups, &reach, &glossed));
                 let entry = fused
                     .entry(doc)
                     .or_insert_with(|| (0.0, vec![(first_chunk_of(corpus, doc), 0.0)]));
@@ -612,6 +767,7 @@ impl Index {
                 }
                 None => Vec::new(),
             };
+            confidence.dense = dense.first().map(|(_, s)| *s);
 
             // Collapse chunk-level lists to their documents, keeping each document's best
             // passage as the snippet.
@@ -645,6 +801,16 @@ impl Index {
                 }
             }
 
+            if let Some(want) = analysis.level {
+                for (doc, entry) in fused.iter_mut() {
+                    match self.levels.get(*doc).copied().flatten() {
+                        Some(l) if l == want => entry.0 *= LEVEL_MATCH,
+                        Some(_) => entry.0 *= LEVEL_MISMATCH,
+                        None => {}
+                    }
+                }
+            }
+
             let mut ranked: Vec<(usize, f32, Vec<(usize, f32)>)> =
                 fused.into_iter().map(|(d, (s, c))| (d, s, c)).collect();
             ranked.sort_by(|a, b| b.1.total_cmp(&a.1));
@@ -652,6 +818,10 @@ impl Index {
             for (doc, score, mut matched) in ranked {
                 if placed.contains_key(&doc) {
                     continue; // already in, by code — nothing may outrank that
+                }
+                let (level, collection) = (self.levels[doc], self.collections[doc].as_deref());
+                if !filter.admits(&corpus.docs()[doc], level, collection) {
+                    continue;
                 }
                 matched.sort_by(|a, b| b.1.total_cmp(&a.1));
                 let passages: Vec<String> = matched
@@ -688,8 +858,25 @@ impl Index {
         }
 
         hits.truncate(limit);
-        hits
+        (hits, confidence)
     }
+}
+
+/// The graduate institute's title prefixes spelled out, so a question that names the level
+/// in words (`doktora tez izleme`) meets a title that names it in letters (`DR Tez İzleme`).
+/// Only the first two words: `HACH LANGE DR 3800` is a spectrometer.
+fn abbreviations(title: &str) -> String {
+    let folded = code_fold(title);
+    let head: Vec<&str> = folded.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).take(2).collect();
+    let prefix = head.first().is_some_and(|w| matches!(*w, "yl" | "dr"));
+    let mut out = String::new();
+    if prefix && head.contains(&"yl") {
+        out.push_str(" yüksek lisans");
+    }
+    if prefix && head.contains(&"dr") {
+        out.push_str(" doktora");
+    }
+    out
 }
 
 fn code_of(corpus: &Corpus, doc: usize) -> String {
@@ -700,6 +887,8 @@ fn code_of(corpus: &Corpus, doc: usize) -> String {
 /// tokenises to `isg`, `tl` and `0001` — every one of them is the code, not a topic.
 /// `code` is already a folded [`code_key`]; tokens arrive folded from [`tokenize`].
 fn is_part_of_code(token: &str, code: &str) -> bool {
+    let token = ascii_fold(token);
+    let token = token.as_str();
     for seg in code.split('-') {
         if token == seg {
             return true;
@@ -729,7 +918,7 @@ fn corpus_prefixes(corpus: &Corpus) -> std::collections::HashSet<String> {
 /// bare number in that corpus almost certainly means. Folded, like every code key.
 pub fn default_family(corpus: &Corpus) -> String {
     if let Some(f) = corpus.header.default_family.as_deref() {
-        return tr_fold(f);
+        return code_fold(f);
     }
     let mut counts: HashMap<String, usize> = HashMap::new();
     for d in corpus.docs() {
@@ -763,31 +952,51 @@ fn first_chunk(corpus: &Corpus, doc: usize) -> String {
         .unwrap_or_else(|| corpus.docs()[doc].title.clone())
 }
 
-/// Find a document by its id or its form code — what `open`, `get` and `save` all take.
-/// Accepts `FR-0083`, `FR-0083.tr`, `fr83`, or the exact id.
+/// Find a document by its id or its code — what `open`, `get` and `save` all take.
+///
+/// However the person typed it: `İA-0021`, `IA-0021`, `ia-0021`, `ia 21`, the full id
+/// `İA-0021.tr`, or a code with the language wanted (`fr-0083.en`). Turkish is preferred
+/// when a code exists in both languages, because it is the primary corpus.
 pub fn resolve<'a>(corpus: &'a Corpus, needle: &str) -> Option<(usize, &'a Doc)> {
     let n = needle.trim();
-    if let Some((i, d)) = corpus.docs().iter().enumerate().find(|(_, d)| d.id == n) {
-        return Some((i, d));
+    let docs = corpus.docs();
+    if let Some(i) = docs.iter().position(|d| d.id == n) {
+        return Some((i, &docs[i]));
     }
-    let code = find_code(n, &corpus_prefixes(corpus), &default_family(corpus))?;
-    // Prefer Turkish when a code exists in both languages: it is the primary corpus.
-    let mut best: Option<(usize, &Doc)> = None;
-    for (i, d) in corpus.docs().iter().enumerate() {
+    let folded = code_fold(n);
+    if let Some(i) = docs.iter().position(|d| code_fold(&d.id) == folded) {
+        return Some((i, &docs[i]));
+    }
+    let (base, lang) = match folded.rsplit_once('.') {
+        Some((b, l)) if l == "tr" || l == "en" => (b, Some(l)),
+        _ => (folded.as_str(), None),
+    };
+    let code = find_code(base, &corpus_prefixes(corpus), &default_family(corpus))?;
+    let want = lang.unwrap_or("tr");
+    let mut fallback = None;
+    for (i, d) in docs.iter().enumerate() {
         if d.code.as_deref().map(code_key).as_deref() == Some(code.as_str()) {
-            if d.lang == "tr" {
+            if d.lang == want {
                 return Some((i, d));
             }
-            best.get_or_insert((i, d));
+            fallback.get_or_insert(i);
         }
     }
-    best
+    fallback.map(|i| (i, &docs[i]))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::corpus::{Chunk, Header};
+
+    fn build(c: &Corpus) -> Index {
+        Index::build(c, &crate::meta::derive(c))
+    }
+
+    fn find(idx: &Index, c: &Corpus, q: &str, v: Option<&[f32]>, sort: Sort, n: usize) -> Vec<Hit> {
+        idx.search(c, q, &crate::lexicon::analyze(q), v, sort, &Filter::default(), n).0
+    }
 
     fn doc(id: &str, code: Option<&str>, lang: &str, title: &str) -> crate::corpus::Doc {
         crate::corpus::Doc {
@@ -860,9 +1069,11 @@ mod tests {
     /// spellings ASCII-only matching silently dropped.
     #[test]
     fn register_codes_are_recognised_turkish_letters_and_all() {
-        let p = prefixes(&["fr", "yö", "ia", "isg-tl", "yn"]);
-        assert_eq!(find_code("YÖ-0080", &p, "fr").as_deref(), Some("yö-0080"));
-        assert_eq!(find_code("yö 80", &p, "fr").as_deref(), Some("yö-0080"));
+        let p = prefixes(&["fr", "yo", "ia", "isg-tl", "yn"]);
+        assert_eq!(find_code("YÖ-0080", &p, "fr").as_deref(), Some("yo-0080"));
+        assert_eq!(find_code("yö 80", &p, "fr").as_deref(), Some("yo-0080"));
+        assert_eq!(find_code("YO-0080", &p, "fr").as_deref(), Some("yo-0080"), "typed without the dots");
+        assert_eq!(find_code("IA-0452", &p, "fr").as_deref(), Some("ia-0452"), "an ASCII I is not a Turkish ı here");
         assert_eq!(find_code("İA-0452 nerede", &p, "fr").as_deref(), Some("ia-0452"));
         assert_eq!(find_code("İSG-TL-0001", &p, "fr").as_deref(), Some("isg-tl-0001"));
         // A single digit stays words — the same guard that keeps `PROJEFR-1` out.
@@ -881,11 +1092,11 @@ mod tests {
     #[test]
     fn a_bare_number_inside_a_question_still_reaches_its_document() {
         let c = corpus();
-        let idx = Index::build(&c);
+        let idx = build(&c);
         // Not a code as far as `find_code` is concerned...
         assert_eq!(find_code("0083 formu nerede", &idx.prefixes, &idx.default_family), None);
         // ...so this hit can only have come from the title field carrying the code.
-        let hits = idx.search(&c, "0083 formu nerede", None, Sort::Relevance, 5);
+        let hits = find(&idx, &c, "0083 formu nerede", None, Sort::Relevance, 5);
         assert_eq!(
             c.docs()[hits[0].doc].code.as_deref(),
             Some("FR-0083"),
@@ -899,8 +1110,8 @@ mod tests {
     #[test]
     fn indexing_the_code_does_not_make_stray_numbers_match() {
         let c = corpus();
-        let idx = Index::build(&c);
-        let hits = idx.search(&c, "2 nüsha halinde doldurulacak", None, Sort::Relevance, 5);
+        let idx = build(&c);
+        let hits = find(&idx, &c, "2 nüsha halinde doldurulacak", None, Sort::Relevance, 5);
         assert!(
             hits.iter().all(|h| c.docs()[h.doc].code.as_deref() != Some("FR-0002")),
             "a bare `2` must not resolve to a document code"
@@ -912,19 +1123,19 @@ mod tests {
     /// bare number with a form that does not exist.
     #[test]
     fn a_bare_number_takes_the_family_the_corpus_declares() {
-        let p = prefixes(&["fr", "yö"]);
-        assert_eq!(find_code("0083", &p, "yö").as_deref(), Some("yö-0083"));
+        let p = prefixes(&["fr", "yo"]);
+        assert_eq!(find_code("0083", &p, "yo").as_deref(), Some("yo-0083"));
         assert_eq!(find_code("0083", &p, ""), None, "no declared family, no guess");
         // Declared in the header, it wins; undeclared, the most common family stands in.
         let mut c = corpus();
         assert_eq!(default_family(&c), "fr");
         c.header.default_family = Some("YÖ".into());
-        assert_eq!(default_family(&c), "yö", "folded like every code key");
+        assert_eq!(default_family(&c), "yo", "folded like every code key");
     }
 
     #[test]
     fn ordinary_words_are_not_mistaken_for_codes() {
-        let p = prefixes(&["fr", "yö", "tl"]);
+        let p = prefixes(&["fr", "yo", "tl"]);
         // The over-eager cases: a bare number inside a sentence, a word that happens to
         // end before digits, and a letter-run that is not a family the corpus contains.
         assert_eq!(find_code("2 nüsha halinde doldurulacak", &p, "fr"), None);
@@ -937,7 +1148,8 @@ mod tests {
     #[test]
     fn code_keys_fold_register_codes_to_one_comparison_space() {
         assert_eq!(code_key("İSG-TL-0001"), "isg-tl-0001");
-        assert_eq!(code_key("YÖ-0080"), "yö-0080");
+        assert_eq!(code_key("YÖ-0080"), "yo-0080");
+        assert_eq!(code_key("İA-21"), code_key("IA-0021"), "dotted, dotless and ASCII are one family");
         assert_eq!(code_key("FR-83"), "fr-0083", "digits are zero-padded");
         assert_eq!(code_key("fr_0083"), "fr-0083", "separators are normalised");
     }
@@ -945,9 +1157,9 @@ mod tests {
     #[test]
     fn an_exact_code_outranks_everything_including_a_better_text_match() {
         let c = corpus();
-        let idx = Index::build(&c);
+        let idx = build(&c);
         // The query names FR-0083 but its WORDS are all about the staj form.
-        let hits = idx.search(&c, "FR-0083 staj belgesi zorunlu işletme", None, Sort::Relevance, 5);
+        let hits = find(&idx, &c, "FR-0083 staj belgesi zorunlu işletme", None, Sort::Relevance, 5);
         assert_eq!(hits[0].why, Why::Code);
         assert!(
             c.docs()[hits[0].doc].code.as_deref() == Some("FR-0083"),
@@ -960,8 +1172,8 @@ mod tests {
     fn lexical_search_works_with_no_embedder_yet() {
         // Provisioning may still be running; search must degrade, not refuse.
         let c = corpus();
-        let idx = Index::build(&c);
-        let hits = idx.search(&c, "staj", None, Sort::Relevance, 5);
+        let idx = build(&c);
+        let hits = find(&idx, &c, "staj", None, Sort::Relevance, 5);
         assert!(!hits.is_empty(), "a lexical hit must survive a missing model");
         assert_eq!(c.docs()[hits[0].doc].title, "Staj Belgesi");
     }
@@ -969,10 +1181,10 @@ mod tests {
     #[test]
     fn the_dense_half_finds_a_form_that_shares_no_word_with_the_query() {
         let c = corpus();
-        let idx = Index::build(&c);
+        let idx = build(&c);
         // Query vector points exactly at chunk 1 (the staj form) and the query text
         // shares no token with it, so only the dense half can produce this hit.
-        let hits = idx.search(&c, "qqqq wwww", Some(&[0.0, 1.0, 0.0]), Sort::Relevance, 5);
+        let hits = find(&idx, &c, "qqqq wwww", Some(&[0.0, 1.0, 0.0]), Sort::Relevance, 5);
         assert!(!hits.is_empty());
         assert_eq!(c.docs()[hits[0].doc].title, "Staj Belgesi");
     }
@@ -980,8 +1192,8 @@ mod tests {
     #[test]
     fn sorting_is_over_the_whole_result_set_and_never_unseats_a_code_match() {
         let c = corpus();
-        let idx = Index::build(&c);
-        let hits = idx.search(&c, "FR-0336 danışman staj", None, Sort::Title, 5);
+        let idx = build(&c);
+        let hits = find(&idx, &c, "FR-0336 danışman staj", None, Sort::Title, 5);
         assert_eq!(hits[0].why, Why::Code, "a code match stays pinned under any sort");
         let rest: Vec<&str> = hits[1..].iter().map(|h| c.docs()[h.doc].title.as_str()).collect();
         let mut sorted = rest.clone();
@@ -1014,8 +1226,8 @@ mod tests {
             c.header.chunks.push(Chunk { doc: d, ord: 0, text: (*name).into() });
             c.vectors.extend([0.0, 0.0, 0.0]);
         }
-        let idx = Index::build(&c);
-        let hits = idx.search(&c, "etüv kullanım talimatı", None, Sort::Relevance, 5);
+        let idx = build(&c);
+        let hits = find(&idx, &c, "etüv kullanım talimatı", None, Sort::Relevance, 5);
         assert_eq!(
             c.docs()[hits[0].doc].code.as_deref(), Some("CH-TL-0002"),
             "the oven must win; got {:?}",
@@ -1054,8 +1266,8 @@ mod tests {
         });
         c.vectors.extend([0.0, 0.0, 0.0]);
 
-        let idx = Index::build(&c);
-        let hits = idx.search(&c, "danışman değişikliği", None, Sort::Relevance, 5);
+        let idx = build(&c);
+        let hits = find(&idx, &c, "danışman değişikliği", None, Sort::Relevance, 5);
         assert!(!hits.is_empty());
         assert_eq!(
             c.docs()[hits[0].doc].title,
@@ -1090,8 +1302,8 @@ mod tests {
         });
         c.vectors.extend([0.0, 0.0, 0.0]);
 
-        let idx = Index::build(&c);
-        let hits = idx.search(&c, "zorunlu staj", None, Sort::Relevance, 5);
+        let idx = build(&c);
+        let hits = find(&idx, &c, "zorunlu staj", None, Sort::Relevance, 5);
         assert_eq!(
             c.docs()[hits[0].doc].code.as_deref(),
             Some("FR-0751"),
@@ -1104,9 +1316,9 @@ mod tests {
     #[test]
     fn a_suffixed_turkish_word_finds_the_form_it_names() {
         let c = corpus();
-        let idx = Index::build(&c);
+        let idx = build(&c);
         for query in ["danışmanımı", "danışmanı", "danışmanlık"] {
-            let hits = idx.search(&c, query, None, Sort::Relevance, 5);
+            let hits = find(&idx, &c, query, None, Sort::Relevance, 5);
             assert!(
                 hits.iter().any(|h| c.docs()[h.doc].code.as_deref() == Some("FR-0083")),
                 "`{query}` must reach Danışman Değişikliği Formu"
@@ -1144,9 +1356,9 @@ mod tests {
     #[test]
     fn a_bare_code_query_answers_with_the_form_and_nothing_else() {
         let c = corpus();
-        let idx = Index::build(&c);
+        let idx = build(&c);
         for query in ["FR-0083", "fr 83", "0083"] {
-            let hits = idx.search(&c, query, Some(&[0.0, 1.0, 0.0]), Sort::Relevance, 25);
+            let hits = find(&idx, &c, query, Some(&[0.0, 1.0, 0.0]), Sort::Relevance, 25);
             assert!(!hits.is_empty(), "{query}");
             assert!(
                 hits.iter().all(|h| h.why == Why::Code),
@@ -1155,7 +1367,7 @@ mod tests {
             );
         }
         // ...but a code WITH a real question still searches for the rest.
-        let hits = idx.search(&c, "FR-0083 staj belgesi", None, Sort::Relevance, 25);
+        let hits = find(&idx, &c, "FR-0083 staj belgesi", None, Sort::Relevance, 25);
         assert!(hits.len() > 1, "a code plus real words must still search");
     }
 
@@ -1164,25 +1376,142 @@ mod tests {
     #[test]
     fn an_unmatched_bare_code_returns_nothing_rather_than_near_misses() {
         let c = corpus();
-        let idx = Index::build(&c);
+        let idx = build(&c);
         // FR is a family the corpus has; 9999 is not a document it has.
-        let hits = idx.search(&c, "FR-9999", Some(&[0.0, 1.0, 0.0]), Sort::Relevance, 25);
+        let hits = find(&idx, &c, "FR-9999", Some(&[0.0, 1.0, 0.0]), Sort::Relevance, 25);
         assert!(
             hits.is_empty(),
             "got {:?}",
             hits.iter().map(|h| &c.docs()[h.doc].title).collect::<Vec<_>>()
         );
         // ...but the same number WITH a real question still searches.
-        assert!(!idx.search(&c, "FR-9999 staj belgesi", None, Sort::Relevance, 25).is_empty());
+        assert!(!find(&idx, &c, "FR-9999 staj belgesi", None, Sort::Relevance, 25).is_empty());
     }
 
     #[test]
     fn every_hit_carries_a_snippet_to_show() {
         let c = corpus();
-        let idx = Index::build(&c);
-        for h in idx.search(&c, "FR-0083 staj", None, Sort::Relevance, 5) {
+        let idx = build(&c);
+        for h in find(&idx, &c, "FR-0083 staj", None, Sort::Relevance, 5) {
             assert!(!h.snippet.is_empty(), "doc {} has no snippet", h.doc);
         }
     }
-}
 
+    fn doc_at(id: &str, code: &str, title: &str) -> crate::corpus::Doc {
+        let mut d = doc(id, Some(code), "tr", title);
+        d.url = format!("https://example.invalid/{id}");
+        d
+    }
+
+    /// The report that found this: `gturag get İA-0021` fetched `A-0021`, and `IA-0021`
+    /// matched nothing. Every spelling of a Turkish code must land on the same document.
+    #[test]
+    fn a_turkish_code_resolves_however_it_is_typed() {
+        let mut c = corpus();
+        c.header.docs.push(doc_at("İA-0021.tr", "İA-0021", "Yüksek Lisans Tez Konusu"));
+        c.header.docs.push(doc_at("YÖ-0054.tr", "YÖ-0054", "Lisansüstü Eğitim Öğretim Yönetmeliği Senato Uygulama Esasları"));
+        for needle in ["İA-0021", "IA-0021", "ia-0021", "ıa 21", "İA-0021.tr", "ia-0021.TR"] {
+            assert_eq!(resolve(&c, needle).map(|(_, d)| d.id.as_str()), Some("İA-0021.tr"), "{needle}");
+        }
+        for needle in ["YÖ-0054", "YO-0054", "yo-54", "yö 0054"] {
+            assert_eq!(resolve(&c, needle).map(|(_, d)| d.id.as_str()), Some("YÖ-0054.tr"), "{needle}");
+        }
+        assert_eq!(resolve(&c, "fr-0083.en").unwrap().1.lang, "en", "a language suffix is honoured");
+        // And a search for the bare code is a code answer, not a padded list.
+        let idx = build(&c);
+        let hits = find(&idx, &c, "IA-0021", None, Sort::Relevance, 25);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].why, Why::Code);
+    }
+
+    /// The report's second case: a graduate student's long question put the undergraduate
+    /// form first and the graduate one ninth.
+    #[test]
+    fn a_graduate_question_prefers_the_graduate_form() {
+        let mut c = corpus();
+        for (i, (id, title)) in [
+            ("FR-0749.tr", "Mühendislik Fakültesi Lisans Mazeretli Ders Kayıt Formu"),
+            ("FR-0087.tr", "YL-DR Mazeretli Kayıt Formu"),
+        ]
+        .iter()
+        .enumerate()
+        {
+            c.header.docs.push(doc_at(id, &id[..7], title));
+            c.header.chunks.push(Chunk { doc: 3 + i as u32, ord: 0, text: (*title).into() });
+            c.vectors.extend([0.0, 0.0, 0.0]);
+        }
+        let idx = build(&c);
+        let q = "yüksek lisans öğrencisiyim mazeretli ders kaydı yapmak istiyorum";
+        let hits = find(&idx, &c, q, None, Sort::Relevance, 5);
+        assert_eq!(
+            c.docs()[hits[0].doc].id, "FR-0087.tr",
+            "got {:?}",
+            hits.iter().map(|h| &c.docs()[h.doc].title).collect::<Vec<_>>()
+        );
+        // The same words asked as an undergraduate put the undergraduate form first.
+        let hits = find(&idx, &c, "lisans mazeretli ders kaydı", None, Sort::Relevance, 5);
+        assert_eq!(c.docs()[hits[0].doc].id, "FR-0749.tr");
+    }
+
+    /// No title says `staj başvurusu`. The question is about internships, and the word that
+    /// only says "an application" must not decide it.
+    #[test]
+    fn a_topic_outweighs_the_word_for_the_kind_of_paper() {
+        let mut c = corpus();
+        for (i, (id, title)) in [
+            ("İA-0004.tr", "Doktora Başvurusu"),
+            ("FR-0744.tr", "Mühendislik Fakültesi Sektör Stajı Protokolü"),
+        ]
+        .iter()
+        .enumerate()
+        {
+            c.header.docs.push(doc_at(id, &id[..7], title));
+            c.header.chunks.push(Chunk { doc: 3 + i as u32, ord: 0, text: (*title).into() });
+            c.vectors.extend([0.0, 0.0, 0.0]);
+        }
+        let idx = build(&c);
+        let hits = find(&idx, &c, "staj başvurusu", None, Sort::Relevance, 5);
+        let top: Vec<&str> = hits.iter().take(2).map(|h| c.docs()[h.doc].id.as_str()).collect();
+        assert!(!top.contains(&"İA-0004.tr"), "an application about something else led: {top:?}");
+        assert!(
+            hits.iter().any(|h| c.docs()[h.doc].id == "FR-0744.tr"),
+            "`staj` must reach `Stajı`: {top:?}"
+        );
+    }
+
+    #[test]
+    fn a_suffix_that_changes_the_stem_still_matches() {
+        assert!(tokenize("kaydı").contains(&"kayıt".to_string()));
+        assert!(tokenize("iznini").contains(&"izin".to_string()));
+    }
+
+    #[test]
+    fn a_filter_narrows_the_results_but_never_hides_a_named_code() {
+        let c = corpus();
+        let idx = build(&c);
+        let only_en = Filter { lang: Some("en".into()), ..Filter::default() };
+        let (hits, _) = idx.search(&c, "danışman staj form", &crate::lexicon::analyze("danışman staj form"), None, Sort::Relevance, &only_en, 25);
+        assert!(hits.iter().all(|h| c.docs()[h.doc].lang == "en"), "{hits:?}");
+        let q = "FR-0336 danışman";
+        let (hits, _) = idx.search(&c, q, &crate::lexicon::analyze(q), None, Sort::Relevance, &only_en, 25);
+        assert_eq!(c.docs()[hits[0].doc].code.as_deref(), Some("FR-0336"), "named, so kept");
+    }
+
+    #[test]
+    fn confidence_reports_how_well_the_best_title_matched() {
+        let c = corpus();
+        let idx = build(&c);
+        let q = "danışman değişikliği";
+        let (_, conf) = idx.search(&c, q, &crate::lexicon::analyze(q), None, Sort::Relevance, &Filter::default(), 5);
+        assert!(conf.title > 0.9, "{conf:?}");
+        let q = "yemekhane menüsü";
+        let (_, conf) = idx.search(&c, q, &crate::lexicon::analyze(q), None, Sort::Relevance, &Filter::default(), 5);
+        assert_eq!(conf.title, 0.0);
+        // A known word beside two the archive has never seen is a weak match, however
+        // completely the known word is covered.
+        let q = "danışman wifi şifresi";
+        let (_, conf) = idx.search(&c, q, &crate::lexicon::analyze(q), None, Sort::Relevance, &Filter::default(), 5);
+        assert!(conf.title > 0.9, "lenient: {conf:?}");
+        assert!(conf.strict < 0.4, "strict: {conf:?}");
+    }
+}

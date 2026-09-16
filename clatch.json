@@ -4,13 +4,13 @@
   "id": "com.breksos.gturag",
   "name": "GTÜ Formlar",
   "description": "Gebze Teknik Üniversitesi'nin bütün resmî dokümanları — formlar, iş akışları, talimatlar, yönergeler — siz ve ajanınızın paylaştığı tek bir arama çubuğunda. Hangi dokümanı aradığınızı bilmeseniz de olur: ne yapmak istediğinizi yazın.",
-  "about": "A search surface over every document Gebze Technical University publishes in its quality system — 1850 of them: forms, workflows, device and laboratory instructions, directives, regulations, policies, surveys and guides, in Turkish and English. Retrieval is hybrid: an exact document code (FR-0083, İA-0432, CH-TL-0001) wins outright, and everything else is title coverage fused with BM25 and dense multilingual embeddings, so \"danışman değiştirmek istiyorum\" finds the advisor-change form without naming it. Turkish gets what it needs — İ folds correctly, words are indexed with their stems, and titles the university wrote without diacritics still match queries that have them. The point is the second surface: every search, every opened document and every saved item is a CLI verb AND a control in the window, over one shared state — the agent's `gturag search staj` types itself into the search bar and fills the results, and what you open by hand rides along on your next prompt so you can just ask \"bunu nasıl dolduracağım?\". The app retrieves; the agent reads and answers. No model runs on a server: the index ships inside the app and the embedder's weights are downloaded once, on first run, into the app's own data directory.",
+  "about": "A search surface over every document Gebze Technical University publishes in its quality system — 1850 of them: forms, workflows, device and laboratory instructions, directives, regulations, policies, surveys and guides, in Turkish and English. Retrieval is hybrid: an exact document code (FR-0083, İA-0432, CH-TL-0001) wins outright, and everything else is title coverage fused with BM25 and dense multilingual embeddings, so \"danışman değiştirmek istiyorum\" finds the advisor-change form without naming it. Turkish gets what it needs — İ folds correctly, words are indexed with their stems, and titles the university wrote without diacritics still match queries that have them. The point is the second surface: every search, every opened document and every saved item is a CLI verb AND a control in the window, over one shared state — the agent's `gturag search staj` types itself into the search bar and fills the results, and what you open by hand rides along on your next prompt so you can just ask \"bunu nasıl dolduracağım?\". Every result says what it is — its collection, revision and date, and whether it is for undergraduate or graduate students — and opening a document asks the university's own site whether that revision is still the one published: a copy the university has since replaced is marked out of date, with a link to the current file. A question the archive cannot answer, like the academic calendar or when a board meets, is told so rather than handed the nearest forms as if they were the answer. The app retrieves; the agent reads and answers. No model runs on a server: the index ships inside the app and the embedder's weights are downloaded once, on first run, into the app's own data directory.",
   "tags": [
     "education",
     "search",
     "productivity"
   ],
-  "version": "0.1.5",
+  "version": "0.1.6",
   "publisher": "breksos",
   "protocol": 2,
   "icon": "assets/icon.png",
@@ -29,15 +29,15 @@
     "commands": [
       {
         "name": "search",
-        "about": "search the GTÜ forms — plain Turkish or English, or a form code like FR-0083; the results fill the window as well as your terminal"
+        "about": "search the archive — describe what you want to do, in Turkish; a document code like FR-0083 or İA-0021 is decisive; --type, --level and --lang filter both surfaces"
       },
       {
         "name": "open",
-        "about": "open one form (title, code, revision, source URL, matching passages) and show it in the window"
+        "about": "open one document (by code, id or result row) in the window, and print what it is and whether the university still publishes this revision"
       },
       {
         "name": "get",
-        "about": "print one form's full text, so its fields can be answered on rather than guessed at"
+        "about": "print one document's full text as Markdown, headed by its revision and the same freshness check"
       },
       {
         "name": "saved",
@@ -61,7 +61,7 @@
       },
       {
         "name": "sync",
-        "about": "check for a newer corpus index and download it; also retries a provisioning step that failed"
+        "about": "check whether a newer archive is published and install it; answers up to date, updated, or could not check"
       },
       {
         "name": "focus",

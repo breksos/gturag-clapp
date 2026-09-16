@@ -18,10 +18,11 @@
 //!   and "failed" without a sentence is indistinguishable from a hang.
 
 use crate::corpus::Corpus;
-use crate::state::Stage;
+use crate::state::{Stage, SyncInfo};
 use anyhow::{bail, Context, Result};
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 /// Where the model's three files live, relative to the data dir.
 pub const MODEL_DIR: &str = "model";
@@ -172,6 +173,15 @@ pub fn model_present(cli: &str) -> bool {
     candidates(cli).iter().any(|d| complete(d))
 }
 
+/// A client for the small requests — a form's text, an index's first bytes — bounded in
+/// time, so a stalled server is an error the caller can report rather than a hang.
+fn quick_agent() -> ureq::Agent {
+    ureq::Agent::config_builder()
+        .timeout_global(Some(Duration::from_secs(20)))
+        .build()
+        .into()
+}
+
 /// Download `url` to `dest`, reporting whole-percent progress. Writes `<dest>.part` and
 /// renames only on success.
 fn download(url: &str, dest: &Path, expect: u64, mut on_progress: impl FnMut(u8)) -> Result<()> {
@@ -300,35 +310,122 @@ pub fn fetch_index(
 /// `.docx`/`.pdf`: the human is sent to the university's own page for that (the
 /// authoritative copy, always current), while an agent gets text it can actually read.
 pub fn fetch_form_text(cli: &str, text_base: &str, id: &str) -> Result<String> {
-    // `id` comes from our own index, never from the caller, but it lands in a URL and a
-    // path — so it is still constrained to what an id can legitimately contain.
-    let safe: String = id
-        .chars()
-        .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_' || *c == '.')
-        .collect();
-    if safe.is_empty() || safe.contains("..") {
-        bail!("`{id}` is not a form id");
+    // `id` comes from our own index, but it lands in a URL and in a file name, so it is
+    // percent-encoded for both — which keeps every character. This used to filter the id to
+    // ASCII, so `İA-0021.tr` was fetched as `A-0021.tr`, a file that does not exist, and
+    // every document with a Turkish letter in its code (İA, YÖ, KİDR) had no full text.
+    if id.is_empty() || id.contains("..") || id.contains(['/', '\\']) {
+        bail!("`{id}` is not a document id");
     }
-
-    let dir = clappkit::data_subdir(cli, "forms");
-    let dest = dir.join(format!("{safe}.json"));
+    let key = crate::util::encode_segment(id);
+    let dest = clappkit::data_subdir(cli, "forms").join(format!("{key}.json"));
     if !dest.is_file() {
-        download(&format!("{text_base}/{safe}.json"), &dest, 4096, |_| {})
-            .with_context(|| format!("fetching the text of {safe}"))?;
+        let url = format!("{}/{key}.json", text_base.trim_end_matches('/'));
+        let body = quick_agent()
+            .get(&url)
+            .call()
+            .map_err(|e| match e {
+                ureq::Error::StatusCode(404) => anyhow::anyhow!("the archive has no stored text for it"),
+                other => anyhow::anyhow!("the archive's text store did not answer ({other})"),
+            })?
+            .body_mut()
+            .read_to_vec()
+            .context("the text download was interrupted")?;
+        if let Some(parent) = dest.parent() {
+            clappkit::ensure_private_dir(parent)?;
+        }
+        clappkit::store::atomic_write(&dest, &body)
+            .with_context(|| format!("cannot cache {}", dest.display()))?;
     }
 
     let raw = std::fs::read_to_string(&dest)
         .with_context(|| format!("cannot read {}", dest.display()))?;
     let form: serde_json::Value = serde_json::from_str(&raw).map_err(|e| {
-        // A GitHub 404 is an HTML page delivered with every appearance of success.
+        // A 404 page delivered with every appearance of success must not stay cached.
         let _ = std::fs::remove_file(&dest);
-        anyhow::anyhow!("the stored form will not parse ({e})")
+        anyhow::anyhow!("the stored text will not parse ({e})")
     })?;
     Ok(form
         .get("text")
         .and_then(|t| t.as_str())
         .unwrap_or_default()
         .to_string())
+}
+
+/// The build time of the index published at `url`, read from its first bytes.
+///
+/// The header serialises `built` within its first few hundred bytes, so a ranged request
+/// answers "is there anything newer?" without downloading twenty megabytes.
+pub fn remote_built(url: &str) -> Result<String> {
+    let mut resp = quick_agent()
+        .get(url)
+        .header("Range", "bytes=0-4095")
+        .call()
+        .with_context(|| format!("cannot reach {url}"))?;
+    let mut buf = Vec::with_capacity(4096);
+    resp.body_mut()
+        .as_reader()
+        .take(4096)
+        .read_to_end(&mut buf)
+        .context("the update address stopped answering")?;
+    if buf.len() < 12 || &buf[..6] != &crate::corpus::MAGIC[..6] {
+        bail!("{url} is not a document index");
+    }
+    if &buf[..8] != crate::corpus::MAGIC {
+        bail!("the published index is a newer format than this app reads — update the app");
+    }
+    let head = String::from_utf8_lossy(&buf[12..]);
+    let at = head.find("\"built\":\"").context("the published index names no build time")?;
+    let rest = &head[at + "\"built\":\"".len()..];
+    let end = rest.find('"').context("the published index's build time is cut off")?;
+    Ok(rest[..end].to_string())
+}
+
+/// What a `sync` found.
+pub enum Synced {
+    /// Nothing newer than what is loaded.
+    Current { remote: String },
+    /// A newer index, verified and installed.
+    Updated { remote: String, corpus: Box<Corpus> },
+}
+
+/// Is a newer index published? Asked cheaply first; downloaded, verified and installed only
+/// when the answer is yes.
+pub fn sync_index(
+    cli: &str,
+    url: &str,
+    local_built: Option<&str>,
+    mut progress: impl FnMut(u8),
+) -> Result<Synced> {
+    let remote = remote_built(url)?;
+    if local_built.is_some_and(|have| remote.as_str() <= have) {
+        return Ok(Synced::Current { remote });
+    }
+    let fetched = fetch_index(cli, url, local_built, |st| {
+        if let Stage::Downloading { percent } = st {
+            progress(percent);
+        }
+    })?;
+    Ok(match fetched {
+        Some(corpus) => Synced::Updated { remote, corpus: Box::new(corpus) },
+        None => Synced::Current { remote },
+    })
+}
+
+fn sync_file(cli: &str) -> PathBuf {
+    clappkit::data_file(cli, "sync.json")
+}
+
+/// The last `sync`, as it was recorded — so `status` can say when the archive was last
+/// checked even after a restart.
+pub fn load_sync(cli: &str) -> Option<SyncInfo> {
+    clappkit::store::load_json(&sync_file(cli))
+}
+
+pub fn save_sync(cli: &str, info: &SyncInfo) {
+    if !clappkit::store::save_json(&sync_file(cli), info) {
+        eprintln!("{cli}: could not record the sync result");
+    }
 }
 
 /// The index that ships inside the depot — the baseline every install starts from, so a

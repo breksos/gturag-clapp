@@ -18,6 +18,7 @@ Writes, under tools/build-index/work/:
 from __future__ import annotations
 
 import argparse
+import html
 import io
 import json
 import os
@@ -188,12 +189,38 @@ def download(rec: dict, refresh: bool) -> Path | None:
 
 # ---------------------------------------------------------------- text extraction
 
-def _xml_text(blob: bytes) -> str:
+def _external_links(z: zipfile.ZipFile, part: str) -> dict[str, str]:
+    """The external link targets a Word part refers to by relationship id."""
+    folder, _, name = part.rpartition("/")
+    rels = f"{folder}/_rels/{name}.rels"
+    if rels not in z.namelist():
+        return {}
+    xml = z.read(rels).decode("utf-8", "replace")
+    out = {}
+    for el in re.findall(r"<Relationship\b([^>]*?)/?>", xml):
+        attrs = dict(re.findall(r'(\w+)="([^"]*)"', el))
+        target = html.unescape(attrs.get("Target", ""))
+        if attrs.get("TargetMode") == "External" and attrs.get("Id") and target.startswith("http"):
+            out[attrs["Id"]] = target
+    return out
+
+
+def _xml_text(blob: bytes, links: dict[str, str] | None = None) -> str:
     s = blob.decode("utf-8", "replace")
+    # A hyperlink's text is kept and its target written after it: "bu linkten" alone
+    # tells a reader there is a document and not where. The target lives in the part's
+    # relationships, which the text itself only names by id.
+    if links:
+        def keep_target(m: re.Match) -> str:
+            rid = re.search(r'r:id="([^"]+)"', m.group(1))
+            url = links.get(rid.group(1)) if rid else None
+            return m.group(2) + (f"<w:t> ({html.escape(url)})</w:t>" if url else "")
+        s = re.sub(r"<w:hyperlink\b([^>]*)>(.*?)</w:hyperlink>", keep_target, s, flags=re.S)
     s = re.sub(r"<w:p\b[^>]*>", "\n", s)          # a Word paragraph is a line break
     s = re.sub(r"<w:br\b[^>]*/?>", "\n", s)
     s = re.sub(r"<[^>]+>", " ", s)
-    return s
+    # Text nodes are XML-escaped; `GÖRÜŞLER &amp; AÇIKLAMALAR` reached 153 documents as is.
+    return html.unescape(s)
 
 
 def text_docx(path: Path) -> str:
@@ -201,7 +228,7 @@ def text_docx(path: Path) -> str:
         parts = [n for n in z.namelist()
                  if n.startswith("word/") and n.endswith(".xml")
                  and ("document" in n or "header" in n or "footer" in n)]
-        return "\n".join(_xml_text(z.read(n)) for n in sorted(parts))
+        return "\n".join(_xml_text(z.read(n), _external_links(z, n)) for n in sorted(parts))
 
 
 def text_xlsx(path: Path) -> str:
@@ -210,7 +237,7 @@ def text_xlsx(path: Path) -> str:
         if "xl/sharedStrings.xml" in z.namelist():
             xml = z.read("xl/sharedStrings.xml").decode("utf-8", "replace")
             for si in re.findall(r"<si>(.*?)</si>", xml, re.S):
-                shared.append("".join(re.findall(r"<t[^>]*>(.*?)</t>", si, re.S)))
+                shared.append(html.unescape("".join(re.findall(r"<t[^>]*>(.*?)</t>", si, re.S))))
         out = []
         for n in sorted(x for x in z.namelist() if re.match(r"xl/worksheets/sheet\d+\.xml$", x)):
             sheet = z.read(n).decode("utf-8", "replace")
@@ -225,7 +252,7 @@ def text_xlsx(path: Path) -> str:
                             i = int(val)
                             val = shared[i] if i < len(shared) else ""
                     else:
-                        val = "".join(re.findall(r"<t[^>]*>(.*?)</t>", body, re.S))
+                        val = html.unescape("".join(re.findall(r"<t[^>]*>(.*?)</t>", body, re.S)))
                     val = val.strip()
                     if val:
                         cells.append(val)
