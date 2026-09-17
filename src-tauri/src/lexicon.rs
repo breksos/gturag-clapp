@@ -99,9 +99,11 @@ const GLOSSARY: &[(&str, &str)] = &[
 const GENERIC: &[&str] = &[
     "basvuru", "basvurusu", "basvurulari", "form", "formu", "formlari", "formun", "dilekce",
     "dilekcesi", "talep", "talebi", "belge", "belgesi", "belgeler", "tutanak", "tutanagi",
-    "rapor", "raporu", "anket", "anketi", "bilgi", "bilgileri", "onay", "onayi", "beyan",
-    "beyani", "bildirim", "bildirimi", "islem", "islemleri", "surec", "sureci",
+    "rapor", "raporu", "anket", "anketi", "bilgi", "bilgileri", "onay", "onayi", "bildirim",
+    "bildirimi", "islem", "islemleri", "surec", "sureci",
 ];
+// Not `beyan`: a declaration is often the very thing asked for (`yapay zeka beyan formu`),
+// and weighing it down put the thesis-topic form above the AI declaration.
 
 /// Is this (Turkish-folded) word a document-kind word?
 pub fn is_generic(word: &str) -> bool {

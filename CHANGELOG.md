@@ -42,6 +42,17 @@ The fixes a graduate student's week with the app asked for.
   the window's toolbar.
 - `get` prints Markdown: a header of facts, then the text without page furniture.
 
+### Archive
+- Refreshed from the university's site on 17 September 2026: 1851 documents, 9104 passages.
+  YÖ-0054 is revision 8 of 10.09.2026; 18 documents are new (among them YÖ-0003 and
+  YÖ-0066); the 17 the university no longer lists are gone; six survey documents have their
+  text back.
+- The pipeline no longer loses documents to three things it used to mistake for "not
+  published": a register revision the university has since replaced (the probe now looks a
+  few revisions ahead), a file the server stores under a decomposed name (the download
+  retries it, and records the address that worked), and a request that timed out (the
+  document is kept, not culled).
+
 ## [0.1.5] - 2026-09-14
 
 ### Changed

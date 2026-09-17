@@ -58,8 +58,10 @@ const TITLE_WEIGHT: f32 = 0.20;
 /// What the education level a query names does to a document's fused score. A preference,
 /// not a filter: a graduate student asking about excused registration wants the graduate
 /// form first, and the undergraduate one that shares more of the question's words should
-/// fall below it without disappearing.
-const LEVEL_MATCH: f32 = 1.3;
+/// fall below it without disappearing. The weight is in the PENALTY. A matching level earns
+/// only a nudge, or a graduate form that merely shares the level outranks the document the
+/// question names by topic (`yapay zeka beyan formu`, whose title says no level at all).
+const LEVEL_MATCH: f32 = 1.1;
 /// How much a document-kind word (`başvuru`, `form`) counts toward title coverage, against a
 /// topic word's 1.0. See [`crate::lexicon::is_generic`].
 const GENERIC_WEIGHT: f32 = 0.45;
@@ -1476,6 +1478,33 @@ mod tests {
         assert!(
             hits.iter().any(|h| c.docs()[h.doc].id == "FR-0744.tr"),
             "`staj` must reach `Stajı`: {top:?}"
+        );
+    }
+
+    /// The report's own good case, kept good: the declaration form wins over the thesis-topic
+    /// form even though the question also names the thesis topic and the graduate level.
+    #[test]
+    fn the_declaration_asked_for_outranks_the_form_it_accompanies() {
+        let mut c = corpus();
+        for (i, (id, title)) in [
+            ("FR-0115.tr", "YL Tez Konusu Bildirim Formu"),
+            ("FR-0876.tr", "GTÜ-Yapay Zeka Beyan Formu"),
+            ("PO-0028.tr", "GTÜ Yapay Zeka Politikası"),
+        ]
+        .iter()
+        .enumerate()
+        {
+            c.header.docs.push(doc_at(id, &id[..7], title));
+            c.header.chunks.push(Chunk { doc: 3 + i as u32, ord: 0, text: (*title).into() });
+            c.vectors.extend([0.0, 0.0, 0.0]);
+        }
+        let idx = build(&c);
+        let q = "Yapay Zeka yüksek lisans tez konusu için gereken ek beyan formu";
+        let hits = find(&idx, &c, q, None, Sort::Relevance, 5);
+        assert_eq!(
+            c.docs()[hits[0].doc].id, "FR-0876.tr",
+            "got {:?}",
+            hits.iter().map(|h| &c.docs()[h.doc].title).collect::<Vec<_>>()
         );
     }
 
