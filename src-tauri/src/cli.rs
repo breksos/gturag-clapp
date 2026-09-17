@@ -6,10 +6,11 @@
 //! (PLAYBOOK §4). The test at the bottom pins the two lists together, because
 //! `clatch validate` reads the manifest and nothing reads this.
 
+use crate::util::iso_to_dmy;
 use crate::CLI;
 use serde_json::{json, Value};
 
-const HELP: &str = r#"gturag — Gebze Teknik Üniversitesi'nin resmî formları, aranabilir.
+const HELP: &str = r#"gturag — Gebze Teknik Üniversitesi'nin resmî dokümanları, aranabilir.
 
   Every one of these is also a control in the window, over one shared state: what you
   search fills the human's screen, and what they open arrives on your next prompt.
@@ -18,48 +19,70 @@ USAGE
   gturag <command> [arguments]
 
 SEARCHING
-  search <query…> [-n N]   Search the forms. Plain Turkish or English works — describe
-                           what you want to DO ("danışman değiştirmek", "staj başvurusu")
-                           rather than guessing a title. A form code is decisive: given
-                           `FR-0083` that form wins outright over any text match.
+  search <query…> [-n N] [--type T] [--level L] [--lang X] [--all]
+                           Search the archive. Describe what you want to DO, in Turkish
+                           ("danışman değiştirmek", "mazeretli ders kaydı"), rather than
+                           guessing a title; say the level ("yüksek lisans") when it
+                           matters. A document code is decisive: FR-0083, İA-0021 or
+                           ia-21 answers with that document alone.
+                           Each result shows its type, revision and level, and the
+                           passage that matched. A note above the results says when the
+                           question is outside this archive, or nothing matched well.
+                           --type   a collection or a code family: "İş Akışları", İA, FR
+                           --level  lisans | lisansustu        --lang  tr | en
+                           --all    clears the filters. Filters are shared state and stay
+                                    until changed, so read the `filter:` line.
                            -n limits what is PRINTED; the shared page is always 25.
   sort <relevance|code|title>
-                           Re-sort the current results. This is shared state, so it
-                           re-pages both surfaces, not just your output.
+                           Re-sort the current results, in both surfaces.
 
-ONE FORM
-  open <id|code>           Open a form and show it in the window: title, code, revision,
-                           language, source URL and the passages that matched. The human
-                           reads the form itself on the university's own page.
-  get <id|code>            Print the form's FULL text, so you can answer questions about
-                           its fields rather than guessing from a passage. Accepts
-                           FR-0083, FR-0083.en, or a full id.
+ONE DOCUMENT              <doc> is a code (FR-0083, İA-0021, IA-0021), a full id
+                          (FR-0083.en), or the row number of a result on screen (1–25).
+  open <doc>               Show it in the window and print what it is: type, revision
+                           and its date, unit, level, source, where it matched — and
+                           whether the university still publishes this revision.
+  get <doc>                Print its FULL text as Markdown, headed by the same facts and
+                           the same freshness check. Read it before answering about a
+                           document's fields, deadlines or conditions.
 
 COLLECTING
   saved                    Print the shared saved list.
-  save <id|code>           Add a form to it. Saving twice is not an error.
-  unsave <id|code>         Remove one.
+  save <doc>               Add a document to it. Saving twice changes nothing, and says so.
+  unsave <doc>             Remove one.
 
 THE APP
-  status                   What both surfaces are looking at: query, results, open form,
-                           saved list, corpus size and date, provisioning state, agents —
-                           and RECENT ACTIVITY: what the human just searched for, opened
-                           or saved, and what other agents did. Read it before assuming
-                           you know what is on their screen.
-  sync                     Check for a newer corpus index and download it. Also the retry
-                           for a provisioning step that failed.
+  status                   What both surfaces are looking at: query, filters, results,
+                           open document, saved list, when the archive was built and last
+                           checked, the search model, agents — and RECENT ACTIVITY: what
+                           the human just did, and what other agents did. Read it before
+                           assuming you know what is on their screen.
+  sync                     Ask whether a newer archive is published, and install it if so.
+                           Answers exactly one of: up to date (with the dates), updated,
+                           or could not check (exit 1). Also retries a failed search model.
   focus                    Bring the window forward.
   close                    Quit the app.
 
+FRESHNESS
+  The archive is a snapshot, and the university replaces documents under it. `open` and
+  `get` ask the university's site whether the indexed revision is still the published
+  one, and say OUT OF DATE, with the current file's address, when it is not. Check before
+  quoting a regulation's article, a deadline or a condition.
+
+SCOPE AND LANGUAGE
+  The archive holds the university's quality-office documents: forms, workflows,
+  directives, regulations, policies, guides, surveys and instructions. It does not hold
+  the academic calendar, announcements or meeting schedules, and search says so rather
+  than guessing. English questions are matched through a glossary of this domain's words
+  and by meaning; Turkish words match best.
+
 NOTES
   Retrieval runs entirely on this machine. The index ships inside the app; on first run
-  the app downloads the embedding model (~450 MB) into a cache shared by every clapp of
-  this family, so a second app never downloads it again. Until the model lands, search
-  still answers — lexically. `status` says which state it is in.
+  the app downloads the embedding model (~465 MB) into its own data directory, unless a
+  copy is already in the shared store (~/.clatch/shared), which it then reads instead.
+  Until the model is loaded, search still answers — lexically. `status` says which.
 
-  The corpus is every form on the university's quality-office Formlar page, kept at its
-  current revision. A form indexed by title alone (a pre-2007 .doc with no extractable
-  text) is marked as such in the results, because it answers name queries and no others."#;
+  A document indexed by title alone (a pre-2007 .doc with no extractable text) is marked
+  as such, because it answers name queries and no others."#;
 
 /// Send one command to the running app and return its JSON reply.
 async fn call(mut req: Value) -> Value {
@@ -98,33 +121,172 @@ fn take_number(args: &mut Vec<String>, short: &str, long: &str) -> Option<usize>
     Some(n)
 }
 
+/// `--flag VALUE`, removed from the argument list.
+fn take_value(args: &mut Vec<String>, long: &str) -> Option<String> {
+    let pos = args.iter().position(|a| a == long)?;
+    let value = args.get(pos + 1).cloned().unwrap_or_else(|| die(&format!("{long} needs a value")));
+    args.drain(pos..=pos + 1);
+    Some(value)
+}
+
+fn take_flag(args: &mut Vec<String>, long: &str) -> bool {
+    match args.iter().position(|a| a == long) {
+        Some(pos) => {
+            args.remove(pos);
+            true
+        }
+        None => false,
+    }
+}
+
 fn field<'a>(v: &'a Value, k: &str) -> &'a str {
     v.get(k).and_then(Value::as_str).unwrap_or("")
 }
 
-/// One result row, the way a terminal wants it.
+fn level_label(l: &str) -> &str {
+    if l == "lisansustu" { "lisansüstü" } else { l }
+}
+
+/// `2026-09-17T14:03:00Z` → `17.09.2026 14:03`.
+fn stamp(iso: &str) -> String {
+    match iso.get(11..16) {
+        Some(hm) => format!("{} {hm}", iso_to_dmy(iso)),
+        None => iso_to_dmy(iso),
+    }
+}
+
+fn one_line(s: &str, max: usize) -> String {
+    let flat = s.split_whitespace().collect::<Vec<_>>().join(" ");
+    if flat.chars().count() <= max {
+        flat
+    } else {
+        format!("{}…", flat.chars().take(max).collect::<String>().trim_end())
+    }
+}
+
+/// `Formlar · rev 1, 18.12.2023 · Lisansüstü Eğitim Enstitüsü · lisansüstü`
+fn meta_line(d: &Value) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    if let Some(c) = d["collection"].as_str() {
+        parts.push(c.to_string());
+    }
+    let mut rev = format!("rev {}", d["rev"].as_u64().unwrap_or(0));
+    if let Some(date) = d["revDate"].as_str() {
+        rev.push_str(&format!(", {}", iso_to_dmy(date)));
+    }
+    parts.push(rev);
+    if let Some(u) = d["unit"].as_str() {
+        parts.push(u.to_string());
+    }
+    if let Some(l) = d["level"].as_str() {
+        parts.push(level_label(l).to_string());
+    }
+    parts.join(" · ")
+}
+
+/// The site check, when it found a problem.
+fn live_mark(d: &Value) -> Option<String> {
+    let live = &d["live"];
+    Some(match live["status"].as_str()? {
+        "newer" => format!("OUT OF DATE — revision {} is published: `gturag open {}`", live["rev"], field(d, "code")),
+        "changed" => "OUT OF DATE — the published file was replaced after this archive was built".into(),
+        "gone" => "WITHDRAWN — no longer published at its address".into(),
+        _ => return None,
+    })
+}
+
+/// The passage that matched, as one line — why this row is here.
+fn evidence(d: &Value) -> Option<String> {
+    let p = d["passages"].as_array()?.first()?.as_str()?;
+    let body = p.split_once('\n').map_or(p, |(_, b)| b);
+    let line = one_line(body, 96);
+    (!line.is_empty()).then_some(line)
+}
+
+/// One result, the way a terminal wants it: what it is, then why it is here.
 fn print_row(i: usize, d: &Value) {
     let code = d.get("code").and_then(Value::as_str).unwrap_or("—");
     let mark = if d["why"] == "code" { "★" } else { " " };
     let thin = if d["titleOnly"] == true { "  (title only)" } else { "" };
     let saved = if d["saved"] == true { " ✓saved" } else { "" };
-    println!(
-        "{mark}{:>3}. {code:<10} {}  [{}]{thin}{saved}",
-        i + 1,
-        field(d, "title"),
-        field(d, "lang")
-    );
+    println!("{mark}{:>3}. {code:<10} {}  [{}]{thin}{saved}", i + 1, field(d, "title"), field(d, "lang"));
+    println!("       {}", meta_line(d));
+    if let Some(m) = live_mark(d) {
+        println!("       ⚠ {m}");
+    }
+    if d["why"] != "code" {
+        if let Some(e) = evidence(d) {
+            println!("       “{e}”");
+        }
+    }
+}
+
+/// `https://www.gtu.edu.tr`, from the archive's own provenance.
+fn site(reply: &Value) -> String {
+    let source = reply["corpus"]["source"].as_str().unwrap_or("");
+    match source.find("://").map(|i| i + 3) {
+        Some(start) => {
+            let end = source[start..].find('/').map_or(source.len(), |i| start + i);
+            source[..end].to_string()
+        }
+        None => "the university's website".into(),
+    }
+}
+
+fn filter_text(f: &Value) -> Option<String> {
+    let mut parts = Vec::new();
+    if let Some(t) = f["type"].as_str() {
+        parts.push(format!("type={t}"));
+    }
+    if let Some(l) = f["level"].as_str() {
+        parts.push(format!("level={}", level_label(l)));
+    }
+    if let Some(l) = f["lang"].as_str() {
+        parts.push(format!("lang={l}"));
+    }
+    (!parts.is_empty()).then(|| format!("{}   (`gturag search … --all` clears)", parts.join(" ")))
+}
+
+/// What must be said before the results.
+fn print_notes(reply: &Value) {
+    if let Some(f) = filter_text(&reply["filter"]) {
+        println!("filter: {f}");
+    }
+    match reply["notice"]["kind"].as_str() {
+        Some("scope") => {
+            let what = match reply["notice"]["scope"].as_str() {
+                Some("calendar") => "Academic calendars, registration and exam dates are",
+                Some("meeting") => "When boards and committees meet is",
+                _ => "Announcements are",
+            };
+            println!(
+                "note: {what} not in this archive; it holds the university's quality-office \
+                 documents. Look on {}. The documents below are only the nearest ones — they do \
+                 not answer the question.",
+                site(reply)
+            );
+        }
+        Some("weak") => println!(
+            "note: nothing in this archive matches well — these are the nearest documents, not an \
+             answer. Try the words a document title would use, or a document code."
+        ),
+        _ => {}
+    }
+    if reply["language"] == "en" {
+        println!("note: read as English — matched through a glossary and by meaning; Turkish words match best.");
+    }
 }
 
 fn print_results(reply: &Value, limit: usize) {
+    print_notes(reply);
     let empty = Vec::new();
     let rows = reply["results"].as_array().unwrap_or(&empty);
     if rows.is_empty() {
         let p = &reply["provision"];
-        if p["ready"] == false {
+        if reply["provision"]["index"]["stage"] != "ready" {
             println!("no results — {}", field(p, "summary"));
         } else {
-            println!("no form matches that. Try describing what you want to do.");
+            println!("no document matches that. Try describing what you want to do, or a document code.");
         }
         return;
     }
@@ -143,16 +305,58 @@ fn print_doc(d: &Value) {
         return;
     }
     println!("{}  {}", d.get("code").and_then(Value::as_str).unwrap_or("—"), field(d, "title"));
-    println!("  id       {}", field(d, "id"));
-    println!("  revision R{}", d["rev"].as_u64().unwrap_or(0));
-    println!("  language {}", field(d, "lang"));
-    println!("  file     {}", field(d, "name"));
-    println!("  source   {}", field(d, "url"));
-    if d["titleOnly"] == true {
-        println!("  note     indexed by title alone — this form's text could not be extracted");
+    println!("  id         {}", field(d, "id"));
+    if let Some(c) = d["collection"].as_str() {
+        println!("  type       {c}");
     }
-    if let Some(s) = d.get("snippet").and_then(Value::as_str) {
-        println!("\n{}", s.trim());
+    let mut rev = format!("{}", d["rev"].as_u64().unwrap_or(0));
+    if let Some(x) = d["revDate"].as_str() {
+        rev.push_str(&format!(" of {}", iso_to_dmy(x)));
+    }
+    if let Some(x) = d["pubDate"].as_str() {
+        rev.push_str(&format!(" · first published {}", iso_to_dmy(x)));
+    }
+    let named = d["revName"].as_u64().unwrap_or(0);
+    if named > 0 && Some(named) != d["rev"].as_u64() {
+        rev.push_str(&format!(" · the file name says R{named}"));
+    }
+    println!("  revision   {rev}");
+    if let Some(u) = d["unit"].as_str() {
+        println!("  unit       {u}");
+    }
+    if let Some(l) = d["level"].as_str() {
+        println!("  level      {}", level_label(l));
+    }
+    println!("  language   {}", field(d, "lang"));
+    println!("  file       {}", field(d, "name"));
+    println!("  source     {}", field(d, "url"));
+    if let Some(t) = d["liveText"].as_str() {
+        println!("  status     {t}");
+    }
+    if d["titleOnly"] == true {
+        println!("  note       indexed by title alone — this document's text could not be extracted");
+    }
+    let empty = Vec::new();
+    let passages = d["passages"].as_array().unwrap_or(&empty);
+    if !passages.is_empty() {
+        println!("\nwhere it matched");
+        for p in passages.iter().filter_map(Value::as_str) {
+            let body = p.split_once('\n').map_or(p, |(_, b)| b);
+            println!("  · {}", one_line(body, 300));
+        }
+    }
+}
+
+/// When the archive was last checked, in one clause.
+fn sync_text(sync: &Value) -> String {
+    if sync.is_null() {
+        return "never checked for a newer archive (`gturag sync`)".into();
+    }
+    let at = stamp(field(sync, "checkedAt"));
+    match sync["outcome"].as_str() {
+        Some("current") => format!("last checked {at} UTC: up to date"),
+        Some("updated") => format!("last checked {at} UTC: updated"),
+        _ => format!("last check {at} UTC failed: {}", field(sync, "error")),
     }
 }
 
@@ -173,13 +377,34 @@ pub async fn run(args: Vec<String>) -> ! {
 
         "search" => {
             let limit = take_number(&mut args, "-n", "--number").unwrap_or(crate::state::PAGE);
+            let clear = take_flag(&mut args, "--all");
+            let mut filter = serde_json::Map::new();
+            for (flag, key) in [("--type", "type"), ("--level", "level"), ("--lang", "lang")] {
+                match take_value(&mut args, flag) {
+                    Some(v) => {
+                        filter.insert(key.into(), json!(v));
+                    }
+                    // `--all` alongside other flags: clear everything they do not set.
+                    None if clear => {
+                        filter.insert(key.into(), json!(""));
+                    }
+                    None => {}
+                }
+            }
             let query = args.join(" ");
             if query.trim().is_empty() {
                 die("search what? e.g. `gturag search staj başvurusu`");
             }
-            let reply = call(json!({ "cmd": "search", "query": query })).await;
+            let mut req = json!({ "cmd": "search", "query": query });
+            if !filter.is_empty() {
+                req["filter"] = Value::Object(filter);
+            }
+            let reply = call(req).await;
+            if reply["ok"] == false {
+                die(field(&reply, "error"));
+            }
             print_results(&reply, limit);
-            // A search that resolved to exactly one named form opens it; show that.
+            // A search that resolved to exactly one named document opens it; show that.
             if reply["open"].is_object() && reply["total"].as_u64() == Some(1) {
                 println!();
                 print_doc(&reply["open"]);
@@ -189,9 +414,11 @@ pub async fn run(args: Vec<String>) -> ! {
         "open" => {
             let id = args.join(" ");
             if id.trim().is_empty() {
-                die("open which form? e.g. `gturag open FR-0083`");
+                die("open which document? e.g. `gturag open FR-0083`, or a row number");
             }
-            let reply = call(json!({ "cmd": "open", "id": id })).await;
+            // `wait`: the terminal holds the answer until the site has been asked, so the
+            // freshness line below is a fact rather than "unknown yet".
+            let reply = call(json!({ "cmd": "open", "id": id, "wait": true })).await;
             if reply["ok"] == false {
                 die(field(&reply, "error"));
             }
@@ -201,23 +428,14 @@ pub async fn run(args: Vec<String>) -> ! {
         "get" => {
             let id = args.join(" ");
             if id.trim().is_empty() {
-                die("get which form? e.g. `gturag get FR-0083`");
+                die("get which document? e.g. `gturag get FR-0083`, or a row number");
             }
             let reply = call(json!({ "cmd": "get", "id": id })).await;
             if reply["ok"] == false {
                 die(field(&reply, "error"));
             }
-            let text = field(&reply, "text");
-            if text.trim().is_empty() {
-                // Three of the 791 have no extractable text. Say so, and point at the one
-                // place the content definitely exists, rather than printing nothing.
-                eprintln!("{CLI}: this form has no extractable text — open it at:");
-                println!("{}", field(&reply, "url"));
-            } else {
-                // The text IS the answer for this verb, so it is the whole of stdout: an
-                // agent reads it directly rather than opening a file.
-                println!("{text}");
-            }
+            // The text IS the answer for this verb, so it is the whole of stdout.
+            print!("{}", field(&reply, "text"));
         }
 
         "saved" => {
@@ -236,14 +454,19 @@ pub async fn run(args: Vec<String>) -> ! {
         "save" | "unsave" => {
             let id = args.join(" ");
             if id.trim().is_empty() {
-                die(&format!("{verb} which form? e.g. `gturag {verb} FR-0083`"));
+                die(&format!("{verb} which document? e.g. `gturag {verb} FR-0083`, or a row number"));
             }
             let reply = call(json!({ "cmd": verb, "id": id })).await;
             if reply["ok"] == false {
                 die(field(&reply, "error"));
             }
             let n = reply["saved"].as_array().map(Vec::len).unwrap_or(0);
-            println!("{n} form(s) saved");
+            let label = field(&reply, "label");
+            match (verb.as_str(), reply["already"] == true) {
+                ("save", true) => println!("{label} was already in the list — nothing changed ({n} saved)"),
+                ("save", false) => println!("saved {label} — {n} in the list"),
+                _ => println!("removed {label} — {n} left in the list"),
+            }
         }
 
         "sort" => {
@@ -258,22 +481,34 @@ pub async fn run(args: Vec<String>) -> ! {
         "status" => {
             let reply = call(json!({ "cmd": "status" })).await;
             let p = &reply["provision"];
-            println!("index    {}", field(p, "summary"));
+            let mut index = field(p, "summary").to_string();
+            if let Some(built) = reply["corpus"]["built"].as_str() {
+                index.push_str(&format!(" · archive built {}", iso_to_dmy(built)));
+            }
+            index.push_str(&format!(" · {}", sync_text(&reply["sync"])));
+            println!("index    {index}");
             if let Some(c) = reply["corpus"].as_object() {
-                println!(
-                    "corpus   {} documents, {} passages, built {}",
-                    c["documents"], c["chunks"], c["built"].as_str().unwrap_or("?")
-                );
+                println!("corpus   {} documents, {} passages", c["documents"], c["chunks"]);
             }
             let q = field(&reply, "query");
             if q.is_empty() {
                 println!("query    —");
             } else {
-                println!("query    {q}  ({} results, sorted by {})",
-                         reply["total"], field(&reply, "sort"));
+                println!("query    {q}  ({} results, sorted by {})", reply["total"], field(&reply, "sort"));
+            }
+            if let Some(f) = filter_text(&reply["filter"]) {
+                println!("filter   {f}");
+            }
+            if let Some(kind) = reply["notice"]["kind"].as_str() {
+                let what = if kind == "scope" { "the question is outside this archive" } else { "nothing matched well" };
+                println!("note     {what}");
             }
             if reply["open"].is_object() {
-                println!("open     {}  {}", field(&reply["open"], "code"), field(&reply["open"], "title"));
+                let o = &reply["open"];
+                println!("open     {}  {}", field(o, "code"), field(o, "title"));
+                if let Some(m) = live_mark(o) {
+                    println!("         ⚠ {m}");
+                }
             }
             println!("saved    {}", reply["saved"].as_array().map(Vec::len).unwrap_or(0));
             let empty = Vec::new();
@@ -285,37 +520,47 @@ pub async fn run(args: Vec<String>) -> ! {
             });
 
             // What the HUMAN has been doing, and what other agents have. This is the half
-            // of the loop that makes the window and the terminal one app: without it, an
-            // agent can read the shared state but has no idea which of it the person in
-            // front of the screen just did.
+            // of the loop that makes the window and the terminal one app.
             let log = reply["activity"].as_array().unwrap_or(&empty);
             if !log.is_empty() {
-                println!("
-recent");
+                println!("\nrecent");
                 for a in log.iter().rev().take(ACTIVITY_SHOWN).collect::<Vec<_>>().iter().rev() {
-                    let who = match a.get("who").and_then(Value::as_str) {
-                        // Resolve the id to a display name against the roster: the log
-                        // stores ids because a name is re-pointable, but a terminal wants
-                        // the name.
-                        Some(id) => agents
-                            .iter()
-                            .find(|ag| field(ag, "id") == id)
-                            .map(|ag| field(ag, "name").to_string())
-                            .unwrap_or_else(|| id.to_string()),
-                        None => "you".to_string(),
-                    };
+                    let who = a
+                        .get("whoName")
+                        .and_then(Value::as_str)
+                        .map(String::from)
+                        .unwrap_or_else(|| if a["who"].is_null() { "you".into() } else { field(a, "who").into() });
                     println!("  {:<10} {:<7} {}", who, field(a, "action"), field(a, "detail"));
                 }
             }
         }
 
         "sync" => {
-            println!("checking for a newer index…");
+            println!("checking whether a newer archive is published…");
             let reply = call(json!({ "cmd": "sync" })).await;
-            if reply["ok"] == false {
-                die(field(&reply, "error"));
+            let info = &reply["sync"];
+            let built = iso_to_dmy(field(info, "built"));
+            let remote = iso_to_dmy(field(info, "remoteBuilt"));
+            match info["outcome"].as_str() {
+                Some("current") if field(info, "remoteBuilt") < field(info, "built") => println!(
+                    "up to date: the archive in use (built {built}) is newer than the published one (built {remote})."
+                ),
+                Some("current") => println!(
+                    "up to date: the archive in use was built {built}, and that is the newest published (checked {} UTC).",
+                    stamp(field(info, "checkedAt"))
+                ),
+                Some("updated") => println!(
+                    "updated: installed the archive built {built} — {} documents. The search on screen was run again against it.",
+                    reply["corpus"]["documents"]
+                ),
+                _ => {
+                    eprintln!("{CLI}: {}", field(&reply, "error"));
+                    if !built.is_empty() {
+                        eprintln!("{CLI}: nothing changed; the archive in use was built {built}.");
+                    }
+                    std::process::exit(1)
+                }
             }
-            println!("{}", field(&reply["provision"], "summary"));
         }
 
         // Window verbs: clappkit answers these before the app's state sees them.

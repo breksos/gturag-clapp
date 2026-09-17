@@ -18,6 +18,7 @@ Writes, under tools/build-index/work/:
 from __future__ import annotations
 
 import argparse
+import html
 import io
 import json
 import os
@@ -27,6 +28,7 @@ import subprocess
 import sys
 import time
 import unicodedata
+import urllib.error
 import urllib.parse
 import urllib.request
 import zipfile
@@ -165,35 +167,80 @@ def doc_id(rec: dict) -> str:
 def download(rec: dict, refresh: bool) -> Path | None:
     RAW.mkdir(parents=True, exist_ok=True)
     dest = RAW / f"{doc_id(rec)}.{rec['ext']}"
+    # Beside each cached file, the spelling of its address that answered: a cached
+    # download must record the same address the fresh one did.
+    address = dest.with_name(dest.name + ".url")
     if dest.exists() and dest.stat().st_size > 0 and not refresh:
+        if address.exists():
+            rec["url"] = address.read_text(encoding="utf-8")
         return dest
-    # The page's hrefs carry raw UTF-8; the server wants them percent-encoded.
-    url = urllib.parse.quote(rec["url"], safe=":/?&=%")
-    for attempt in range(3):
-        try:
-            req = urllib.request.Request(url, headers=UA)
-            with urllib.request.urlopen(req, timeout=120) as r:
-                body = r.read()
-            if not body:
-                raise OSError("empty body")
-            dest.write_bytes(body)
-            return dest
-        except Exception as e:  # noqa: BLE001 — the report records every failure
-            if attempt == 2:
+    # The page's hrefs carry raw UTF-8; the server wants them percent-encoded. And the
+    # server stores some file names DECOMPOSED (NFD) while the page writes them composed
+    # (NFC): the composed address answers 404 for the very file the page links. So a 404 is
+    # retried decomposed, and the spelling that worked is what the database records — the
+    # app's links and its freshness check read that address.
+    spellings = [rec["url"]]
+    decomposed = unicodedata.normalize("NFD", rec["url"])
+    if decomposed != rec["url"]:
+        spellings.append(decomposed)
+    for spelling in spellings:
+        url = urllib.parse.quote(spelling, safe=":/?&=%")
+        for attempt in range(3):
+            try:
+                req = urllib.request.Request(url, headers=UA)
+                with urllib.request.urlopen(req, timeout=120) as r:
+                    body = r.read()
+                if not body:
+                    raise OSError("empty body")
+                dest.write_bytes(body)
+                address.write_text(spelling, encoding="utf-8")
+                rec["url"] = spelling
+                rec.pop("error", None)
+                return dest
+            except urllib.error.HTTPError as e:
                 rec["error"] = f"download failed: {e}"
-                return None
-            time.sleep(1.5 * (attempt + 1))
+                break  # a status is an answer; the next spelling may be the right one
+            except Exception as e:  # noqa: BLE001 — the report records every failure
+                rec["error"] = f"download failed: {e}"
+                if attempt < 2:
+                    time.sleep(1.5 * (attempt + 1))
     return None
 
 
 # ---------------------------------------------------------------- text extraction
 
-def _xml_text(blob: bytes) -> str:
+def _external_links(z: zipfile.ZipFile, part: str) -> dict[str, str]:
+    """The external link targets a Word part refers to by relationship id."""
+    folder, _, name = part.rpartition("/")
+    rels = f"{folder}/_rels/{name}.rels"
+    if rels not in z.namelist():
+        return {}
+    xml = z.read(rels).decode("utf-8", "replace")
+    out = {}
+    for el in re.findall(r"<Relationship\b([^>]*?)/?>", xml):
+        attrs = dict(re.findall(r'(\w+)="([^"]*)"', el))
+        target = html.unescape(attrs.get("Target", ""))
+        if attrs.get("TargetMode") == "External" and attrs.get("Id") and target.startswith("http"):
+            out[attrs["Id"]] = target
+    return out
+
+
+def _xml_text(blob: bytes, links: dict[str, str] | None = None) -> str:
     s = blob.decode("utf-8", "replace")
+    # A hyperlink's text is kept and its target written after it: "bu linkten" alone
+    # tells a reader there is a document and not where. The target lives in the part's
+    # relationships, which the text itself only names by id.
+    if links:
+        def keep_target(m: re.Match) -> str:
+            rid = re.search(r'r:id="([^"]+)"', m.group(1))
+            url = links.get(rid.group(1)) if rid else None
+            return m.group(2) + (f"<w:t> ({html.escape(url)})</w:t>" if url else "")
+        s = re.sub(r"<w:hyperlink\b([^>]*)>(.*?)</w:hyperlink>", keep_target, s, flags=re.S)
     s = re.sub(r"<w:p\b[^>]*>", "\n", s)          # a Word paragraph is a line break
     s = re.sub(r"<w:br\b[^>]*/?>", "\n", s)
     s = re.sub(r"<[^>]+>", " ", s)
-    return s
+    # Text nodes are XML-escaped; `GÖRÜŞLER &amp; AÇIKLAMALAR` reached 153 documents as is.
+    return html.unescape(s)
 
 
 def text_docx(path: Path) -> str:
@@ -201,7 +248,7 @@ def text_docx(path: Path) -> str:
         parts = [n for n in z.namelist()
                  if n.startswith("word/") and n.endswith(".xml")
                  and ("document" in n or "header" in n or "footer" in n)]
-        return "\n".join(_xml_text(z.read(n)) for n in sorted(parts))
+        return "\n".join(_xml_text(z.read(n), _external_links(z, n)) for n in sorted(parts))
 
 
 def text_xlsx(path: Path) -> str:
@@ -210,7 +257,7 @@ def text_xlsx(path: Path) -> str:
         if "xl/sharedStrings.xml" in z.namelist():
             xml = z.read("xl/sharedStrings.xml").decode("utf-8", "replace")
             for si in re.findall(r"<si>(.*?)</si>", xml, re.S):
-                shared.append("".join(re.findall(r"<t[^>]*>(.*?)</t>", si, re.S)))
+                shared.append(html.unescape("".join(re.findall(r"<t[^>]*>(.*?)</t>", si, re.S))))
         out = []
         for n in sorted(x for x in z.namelist() if re.match(r"xl/worksheets/sheet\d+\.xml$", x)):
             sheet = z.read(n).decode("utf-8", "replace")
@@ -225,7 +272,7 @@ def text_xlsx(path: Path) -> str:
                             i = int(val)
                             val = shared[i] if i < len(shared) else ""
                     else:
-                        val = "".join(re.findall(r"<t[^>]*>(.*?)</t>", body, re.S))
+                        val = html.unescape("".join(re.findall(r"<t[^>]*>(.*?)</t>", body, re.S)))
                     val = val.strip()
                     if val:
                         cells.append(val)
@@ -362,7 +409,8 @@ def main() -> int:
         extra = json.loads(probe.read_text(encoding="utf-8"))
         for code, h in extra.items():
             path = urllib.parse.urlparse(h["url"]).path
-            name = urllib.parse.unquote(path.rsplit("/", 1)[-1])
+            # Composed for display: the address may be decomposed (see `download`).
+            name = unicodedata.normalize("NFC", urllib.parse.unquote(path.rsplit("/", 1)[-1]))
             stem, _, ext = name.rpartition(".")
             records.append(dict(
                 url=h["url"], path=urllib.parse.unquote(path), name=name, ext=ext.lower(),
@@ -443,12 +491,23 @@ def main() -> int:
     # A form GTÜ has withdrawn must LEAVE the database, or it stays searchable forever.
     # The live page is the authority on what currently applies, so anything in forms/ that
     # the page no longer lists is removed — and named, so the deletion is never silent.
-    removed = []
+    removed, kept_unsure = [], []
+    # A document the probe could not ASK about (a timeout) is not a document the source
+    # stopped listing: it stays, and says so.
+    unsure_path = WORK / "probe-unsure.json"
+    unsure = set(json.loads(unsure_path.read_text(encoding="utf-8"))) if unsure_path.exists() else set()
     if FORMS.is_dir() and not args.limit:
         for stale in sorted(FORMS.glob("*.json")):
-            if stale.name not in written:
-                stale.unlink()
-                removed.append(stale.name)
+            if stale.name in written:
+                continue
+            code = json.loads(stale.read_text(encoding="utf-8")).get("code")
+            if code in unsure:
+                kept_unsure.append(stale.name)
+                continue
+            stale.unlink()
+            removed.append(stale.name)
+    for name in kept_unsure:
+        print(f"    – kept {name} (the probe could not reach the server for it)")
     for name in removed:
         print(f"    – removed {name} (no longer listed on any source page)")
 

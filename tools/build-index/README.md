@@ -25,11 +25,16 @@ LS-0003.xlsx ──register.py──▶ work/register.json          the inventor
   `work/register.json`. One row per revision in, one entry per document out.
 - **`probe.py`** — the register lists documents nothing links to; this constructs
   their CDN URLs from the family-folder map and proves each with a HEAD request.
-  Only proven URLs are ever downloaded.
+  Only proven URLs are ever downloaded. The register is a snapshot, so a row whose
+  revision no longer answers is retried a few revisions ahead: the university takes the old
+  file down when it publishes a new one (`YÖ-0054 … R7.pdf` is a 404 once `R8.pdf` is up).
 - **`fetch.py`** — the full build: scrapes the listing pages, merges the proven
   register rows, downloads, extracts text (`docx`/`xlsx` natively, `pdf` via
   pypdf, legacy `.doc`/`.xls` via LibreOffice), and **culls** — a document no
-  source lists any more leaves `forms/`, loudly. Run it only with
+  source lists any more leaves `forms/`, loudly. The server stores some file names
+  decomposed (NFD) while its pages link them composed, so a 404 is retried decomposed, and
+  the address that worked is the one `forms/` records — the app links and checks exactly
+  that address. Word hyperlinks keep their targets, and XML entities are decoded. Run it only with
   `work/probe.json` present, or the register half of the corpus will be culled
   as unlisted.
 - **`fetch_register.py`** — the incremental half: downloads and extracts ONLY

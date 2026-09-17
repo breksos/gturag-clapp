@@ -491,3 +491,46 @@ mark {
 .results::-webkit-scrollbar-thumb:hover, .detail::-webkit-scrollbar-thumb:hover {
   background: var(--line-strong); background-clip: content-box;
 }
+
+/* ---- what a result is, and whether it is current ------------------------ */
+
+/* Machine data, so monospace (rule 4): collection, revision and date, level. */
+.meta {
+  margin: 6px 0 0; color: var(--muted);
+  font-family: var(--mono); font-size: 11px;
+}
+.data { font-family: var(--mono); }
+.badge.stale { background: var(--paper); border-color: var(--crimson); color: var(--crimson-text); }
+
+/* The site check leads the detail card, because it decides whether the facts below hold. */
+.live { margin: 0 0 12px; font-size: 12.5px; line-height: 1.45; }
+.live.quiet { color: var(--muted); }
+.live.stale {
+  padding: 8px 11px;
+  border: var(--rule); border-left: 6px solid var(--crimson);
+  background: var(--paper);
+}
+.live a { color: var(--accent); font-weight: 700; }
+
+/* Said above the results, in the provisioning banner's voice: a sentence, not a label. */
+.notice {
+  background: var(--paper);
+  border: var(--rule); border-left: 6px solid var(--crimson);
+  padding: 10px 13px; font-size: 13px; line-height: 1.45;
+}
+.notice span { color: var(--muted); }
+.notice a { color: var(--accent); font-weight: 700; }
+.notice.quiet { border-left-color: var(--line-strong); }
+
+/* Their own row under the count and the sort: what narrows the results reads apart from
+   what orders them. */
+.filters { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; flex-basis: 100%; }
+.filters select {
+  border: var(--rule); background: var(--paper); color: var(--text);
+  padding: 4px 8px; font: inherit; font-size: 11.5px; max-width: 190px;
+}
+.filters select:focus-visible, .sorts button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.toolbar { gap: 10px; flex-wrap: wrap; }
+
+.sync-state { color: var(--muted); font-family: var(--mono); font-size: 11px; }
+.sync-state.failed { color: var(--crimson-text); }

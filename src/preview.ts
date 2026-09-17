@@ -5,7 +5,7 @@
 // agent-driven search, a title-only document. Waiting for a 450 MB download to see what
 // the progress bar looks like is not a workflow.
 //
-//     npm run dev:web        then open /?preview=<state>
+//     npm run dev            then open /?preview=<state>
 //
 // It works by answering the two calls bridge.ts makes — `run_cmd` and the `state` event —
 // before @tauri-apps/api can fail to find a host. Nothing in App.tsx knows it is being
@@ -28,6 +28,14 @@ function doc(
     name: `${code} ${title} R1.docx`,
     ext: "docx",
     url: `https://www.gtu.edu.tr/fileman/${code}.docx`,
+    revName: 1,
+    revDate: "2023-12-18",
+    pubDate: "2017-06-21",
+    unit: null,
+    collection: "Formlar",
+    level: "lisansustu",
+    live: null,
+    liveText: null,
     titleOnly: false,
     saved: false,
     score: 0.03,
@@ -42,11 +50,25 @@ function doc(
 }
 
 const RESULTS: Doc[] = [
-  doc("FR-0083", "YL-DR Danışman Değişikliği Formu", { why: "code", score: 1 }),
+  doc("FR-0083", "YL-DR Danışman Değişikliği Formu", {
+    why: "code",
+    score: 1,
+    live: { status: "current", checkedAt: "2026-09-17T08:00:00Z" },
+  }),
   doc("FR-0086", "YL-DR Farklı Üniversiteden Ders Alma Bildirim Formu"),
   doc("FR-0087", "YL-DR Mazeretli Kayıt Formu", { saved: true }),
   doc("FR-0336", "Staj Belgesi", { titleOnly: true, snippet: "Staj Belgesi", ext: "doc" }),
-  doc("FR-0175", "Lisans-Lisansüstü İlişik Kesme Formu", { lang: "tr", rev: 7 }),
+  doc("FR-0175", "Lisans-Lisansüstü İlişik Kesme Formu", {
+    lang: "tr",
+    rev: 7,
+    level: null,
+    live: {
+      status: "newer",
+      rev: 8,
+      url: "https://www.gtu.edu.tr/fileman/FR-0175 R8.docx",
+      checkedAt: "2026-09-17T08:00:00Z",
+    },
+  }),
 ];
 
 const AGENTS = [
@@ -77,6 +99,14 @@ const BASE: Snapshot = {
     built: "2026-08-12",
     source: "https://www.gtu.edu.tr/kategori/2382/0/display.aspx",
     updateUrl: null,
+    collections: ["Formlar", "İş Akışları", "Yönergeler", "Yönetmelikler"],
+  },
+  sync: {
+    checkedAt: "2026-09-17T08:00:00Z",
+    outcome: "current",
+    built: "2026-09-02T14:01:35Z",
+    remoteBuilt: "2026-09-02T14:01:35Z",
+    error: null,
   },
   agents: AGENTS,
 };
@@ -114,6 +144,22 @@ const STATES: Record<string, Snapshot> = {
     activity: [
       { seq: 1, who: "a-1", whoName: "Berk", action: "open", detail: "FR-0083 YL-DR Danışman Değişikliği Formu" },
     ],
+  },
+  // A calendar question: the archive says it is not the place, and the open form is one
+  // the university has since replaced.
+  scope: {
+    ...BASE,
+    query: "2026 güz akademik takvim ders kayıt tarihleri",
+    title: "“2026 güz akademik takvim ders kayıt tarihleri” — 5 sonuç",
+    notice: { kind: "scope", scope: "calendar" },
+    open: RESULTS[4],
+  },
+  weak: { ...BASE, query: "kampüs wifi şifresi", notice: { kind: "weak" } },
+  english: {
+    ...BASE,
+    query: "I need to register my master's thesis topic",
+    language: "en",
+    filter: { lang: "tr", level: "lisansustu", type: "Formlar" },
   },
   downloading: stage(
     { stage: "downloading", percent: 37 },

@@ -1,61 +1,82 @@
-#!/usr/bin/env bash
-# Prove the two surfaces talk: build → package → validate → CLI ⇄ GUI round-trip.
+#!/usr/bin/env sh
+# Does this clapp actually work? build → package → `clatch validate` → prove the GUI
+# process and the agent CLI round-trip over the app's private socket. One command, one
+# PASS/FAIL. Run it before every commit.
 #
-# `clatch validate` reads the manifest and nothing reads the code (PLAYBOOK §4). This
-# script is what closes that gap — plus the check PLAYBOOK §9 calls the better half:
-# a CLI that FAILS with the app's own "not running" sentence has proved it got as far as
-# dialling its socket, which means the two-surface wiring survived packaging.
-set -euo pipefail
+# The round-trip runs THE BINARY FROM THE DEPOT, not the one in target/release, so
+# what is tested is exactly what ships — including, for a clapp that vendors a runtime,
+# that the vendored runtime is found where the app looks for it.
+#
+# It needs a desktop session (a GUI window has to come up), so it is a local dev gate,
+# not a CI step. CI builds, packages and validates; a headless box stops at the socket.
+set -eu
+. "$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)/lib.sh"
 
-cd "$(dirname "$0")/.."
-ROOT="$PWD"
+# ── this clapp ──────────────────────────────────────────────────────────────────
+PROBE=status           # a DECLARED, read-only verb — the round-trip probe
+QUIT=close             # the DECLARED verb that ends the app
+# The engine's own tests. `cargo build` never compiles #[cfg(test)], so test code rots
+# silently while every build stays green; this is the gate that runs them.
+app_checks() {
+  step "cargo test"
+  ( cd "$ROOT/src-tauri" && cargo test --quiet >&2 ) || fail "the engine's tests failed"
+  ok
+}
 
-echo "── 1. tests ─────────────────────────────────────────"
-# `cargo build` cannot see #[cfg(test)] — test code rots silently while everything looks
-# green (PLAYBOOK, field notes).
-( cd src-tauri && cargo test --quiet )
+# ── everything below this line is byte-identical in every clapp ──────────────────
 
-echo
-echo "── 2. package ───────────────────────────────────────"
-# Through `bash`, not as a bare path. The scripts carry the executable bit in the index now,
-# but a source zip from a GitHub release drops it, and so does a clone with
-# core.fileMode=false — and the symptom is `Permission denied` on step 2, on every platform
-# except the Windows one this repo is authored on. Same idiom release.yml uses.
-bash scripts/package.sh
+CLI="$(manifest connector.cli)" || fail "clatch.json: connector.cli is missing"
+# For `app_checks` to use. The round-trip below does NOT need it: the depot manifest
+# already spells the host's binary, .exe and all.
+EXE="$(exe_suffix)"
 
-echo
-echo "── 3. the depot's own manifest ──────────────────────"
-# Read cliBin OUT of the packaged manifest. verify.sh once looked for bin/<cli> and broke
-# the day macOS packaging moved the binary into a .app bundle (PLAYBOOK §12).
-CLI_BIN=$(node -p "require('$ROOT/pkg/clatch.json').connector.cliBin")
-BIN="$ROOT/pkg/$CLI_BIN"
-[ -f "$BIN" ] || { echo "verify: the manifest points at $CLI_BIN, which is not there" >&2; exit 1; }
-echo "  cliBin = $CLI_BIN"
+# 1. build + assemble. package.sh prints the depot path on stdout and narrates on
+#    stderr, so this both runs the build and tells us where the artefact landed.
+DIST="$("$ROOT/scripts/package.sh")"
+# The depot's OWN manifest, not this repo's: package.sh rewrites connector.cliBin per
+# host — on macOS the binary moves into a real .app bundle, so `bin/<cli>` is not where
+# it lands. Hardcoding that path made this gate silently unrunnable for every bundled
+# app: the probe could never reach a binary that was not there, and the failure read as
+# "the app never came up".
+BIN="$DIST/$(manifest_path "$DIST/clatch.json" cliBin "$(host_os)")"
 
-echo
-echo "── 4. the binary runs at all ────────────────────────"
-# The cheapest missing-DLL check is not reading the import table, it is running the
-# binary: Windows resolves a PE's imports at process start, so an exe with an unsatisfied
-# dependency cannot print --help at all.
-"$BIN" --help | head -n 1
+app_checks
 
-echo
-echo "── 5. the CLI dials its socket ──────────────────────"
-# With no app running this MUST fail, and with the app's own sentence — not a panic, not
-# a hang, not exit 0.
-if OUT=$("$BIN" status 2>&1); then
-    echo "verify: \`status\` succeeded with no app running — is a stale instance up?" >&2
-    echo "$OUT" >&2
-    exit 1
+# 2. the conformance oracle: does the depot satisfy the Clapp Protocol?
+step "clatch validate"
+if CLATCH="$(find_clatch)"; then
+  "$CLATCH" validate "$DIST" >&2 || fail "clatch validate rejected the depot"
+  ok
+else
+  note "clatch not found — skipped. Put it on PATH or set CLATCH_BIN to run the oracle"
 fi
-case "$OUT" in
-    *"not running"*) echo "  $OUT" ;;
-    *) echo "verify: expected the app's \"not running\" sentence, got:" >&2
-       echo "$OUT" >&2; exit 1 ;;
-esac
 
-echo
-echo "✓ verified — now the real path:"
-echo "    clatch install $(ls -t "$ROOT"/*.clapp | head -n 1)"
-echo "    clatch run $(node -p "require('$ROOT/clatch.json').id")"
-echo "    $(node -p "require('$ROOT/clatch.json').connector.cli") status"
+# 3. the two surfaces must actually talk. Nothing else in the toolchain checks this:
+#    clatch validate reads the manifest, the compiler reads the code, and neither can
+#    tell you that `<cli> <verb>` reaches the running window.
+step "socket round-trip — agent CLI ⇄ GUI, through the packaged binary"
+LOG="${TMPDIR:-/tmp}/$CLI-verify.log"
+CLATCH_STANDALONE=1 "$BIN" app >"$LOG" 2>&1 &
+PID=$!
+OUT=""
+i=0
+while [ "$i" -lt 100 ]; do
+  if OUT="$("$BIN" "$PROBE" 2>&1)"; then break; fi
+  OUT=""
+  sleep 0.2
+  i=$((i + 1))
+done
+if [ -z "$OUT" ]; then
+  kill "$PID" 2>/dev/null || true
+  fail "\`$CLI $PROBE\` never reached the app (20s). Tail of $LOG:
+$(tail -n 20 "$LOG" 2>/dev/null | sed 's/^/      /')"
+fi
+printf '%s\n' "$OUT" | sed 's/^/      /' >&2
+ok "\`$CLI $PROBE\` answered"
+
+"$BIN" "$QUIT" >/dev/null 2>&1 || true
+sleep 0.5
+kill "$PID" 2>/dev/null || true
+
+printf '\n✓ PASS — %s builds, packages%s, and its two surfaces talk.\n' \
+  "$CLI" "$(find_clatch >/dev/null 2>&1 && printf ', validates' || printf ' (validate skipped)')" >&2

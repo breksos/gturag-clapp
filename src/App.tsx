@@ -8,8 +8,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Emblem } from "./Emblem";
 import {
   useApp, useAsset, prefetchAssets, agentTint, isMatch, fold, nameOf, builtOn,
-  openUrl, viewUrl, usesViewer,
-  percentOf, type Doc, type Agent, type Activity, type Snapshot,
+  openUrl, viewUrl, usesViewer, dmy, when, levelLabel, siteOf,
+  percentOf, type Doc, type Agent, type Activity, type Snapshot, type Live, type FilterReq,
 } from "./bridge";
 
 /** Debounced so a fast typist does not run a search per keystroke. */
@@ -62,6 +62,7 @@ export default function App() {
           </div>
         </div>
         <div className="header-right">
+          <SyncState state={state} />
           <SyncButton state={state} onSync={() => run({ cmd: "sync" })} />
           <div className="agents">
             {state.agents.map((a) => (
@@ -98,9 +99,15 @@ export default function App() {
 
         <Strip state={state} />
 
+        <NoticeBar state={state} />
+
         <div className="panes">
           <section className="results">
-              <Toolbar state={state} onSort={(by) => run({ cmd: "sort", by })} />
+              <Toolbar
+                state={state}
+                onSort={(by) => run({ cmd: "sort", by })}
+                onFilter={(filter) => run({ cmd: "filter", filter })}
+              />
               {state.results.length === 0 ? (
                 <Empty state={state} />
               ) : (
@@ -207,6 +214,7 @@ function Row({
           <Mark text={doc.title} terms={terms} />
         </h3>
         {doc.why === "code" && <span className="badge exact">tam eşleşme</span>}
+        {staleLabel(doc.live) && <span className="badge stale">{staleLabel(doc.live)}</span>}
         <span className={`badge lang ${doc.lang}`}>{doc.lang.toUpperCase()}</span>
         <span className="badge ext">{doc.ext.toUpperCase()}</span>
         <button
@@ -220,6 +228,8 @@ function Row({
           {doc.saved ? "★" : "☆"}
         </button>
       </div>
+
+      <p className="meta">{metaOf(doc)}</p>
 
       {evidence.length > 0 ? (
         <div className="evidence">
@@ -258,12 +268,19 @@ function Detail({
   return (
     <div className="detail-card">
       <div className="detail-code">
-        {doc.code ?? "—"} <span className="rev">R{doc.rev}</span>
+        {doc.code ?? "—"} <span className="rev">Değ. {doc.rev}</span>
       </div>
       <h2>{doc.title}</h2>
+      <LiveBanner live={doc.live} />
       <dl>
+        {doc.collection && (<><dt>Tür</dt><dd>{doc.collection}</dd></>)}
+        <dt>Revizyon</dt>
+        <dd className="data">{doc.rev}{doc.revDate ? ` · ${dmy(doc.revDate)}` : ""}</dd>
+        {doc.pubDate && (<><dt>İlk yayın</dt><dd className="data">{dmy(doc.pubDate)}</dd></>)}
+        {doc.unit && (<><dt>Birim</dt><dd>{doc.unit}</dd></>)}
+        {doc.level && (<><dt>Düzey</dt><dd>{levelLabel(doc.level)}</dd></>)}
         <dt>Dosya</dt><dd>{doc.name}</dd>
-        <dt>Tür</dt><dd>{doc.ext.toUpperCase()}</dd>
+        <dt>Biçim</dt><dd>{doc.ext.toUpperCase()}</dd>
         <dt>Dil</dt><dd>{doc.lang === "tr" ? "Türkçe" : "İngilizce"}</dd>
       </dl>
       <div className="detail-actions">
@@ -331,8 +348,8 @@ function Detail({
  * and after being pressed reads as broken, and this one can take a while.
  */
 function SyncButton({ state, onSync }: { state: Snapshot; onSync: () => void }) {
-  const busy = state.provision.index.stage === "downloading";
-  const failed = state.provision.index.stage === "failed";
+  const busy = state.syncing || state.provision.index.stage === "downloading";
+  const failed = state.provision.index.stage === "failed" || state.sync?.outcome === "failed";
   const percent = percentOf(state.provision.index);
   return (
     <button
@@ -346,7 +363,7 @@ function SyncButton({ state, onSync }: { state: Snapshot; onSync: () => void }) 
       }
     >
       <span className="syncicon">⟳</span>
-      {busy ? `Güncelleniyor… ${percent ?? 0}%` : "Dizini güncelle"}
+      {busy ? (percent === null ? "Kontrol ediliyor…" : `Güncelleniyor… ${percent}%`) : "Dizini güncelle"}
     </button>
   );
 }
@@ -373,7 +390,7 @@ function Provisioning({ state, onRetry }: { state: Snapshot; onRetry: () => void
 
   const failed = model.stage === "failed" || index.stage === "failed";
   const percent = percentOf(index) ?? percentOf(model);
-  const lexicalOnly = index.stage === "ready" && model.stage !== "ready";
+  const lexicalOnly = index.stage === "ready" && model.stage !== "ready" && model.stage !== "failed";
 
   return (
     <div className={`provision ${failed ? "failed" : ""}`}>
@@ -415,12 +432,19 @@ function Strip({ state }: { state: Snapshot }) {
   );
 }
 
-function Toolbar({ state, onSort }: { state: Snapshot; onSort: (by: string) => void }) {
+function Toolbar({
+  state, onSort, onFilter,
+}: {
+  state: Snapshot; onSort: (by: string) => void; onFilter: (f: FilterReq) => void;
+}) {
   const options: [string, string][] = [
     ["relevance", "İlgi"],
-    ["code", "Form no"],
+    ["code", "Kod"],
     ["title", "Ad"],
   ];
+  const levels: [string, string][] = [["", "Tümü"], ["lisans", "Lisans"], ["lisansustu", "Lisansüstü"]];
+  const langs: [string, string][] = [["", "Tümü"], ["tr", "TR"], ["en", "EN"]];
+  const collections = state.corpus?.collections ?? [];
   return (
     <div className="toolbar">
       <span className="count">{state.total > 0 ? `${state.total} sonuç` : ""}</span>
@@ -435,6 +459,38 @@ function Toolbar({ state, onSort }: { state: Snapshot; onSort: (by: string) => v
             {label}
           </button>
         ))}
+      </div>
+      <div className="filters">
+        <select
+          value={state.filter.type ?? ""}
+          onChange={(e) => onFilter({ type: e.target.value })}
+          aria-label="Belge türü"
+        >
+          <option value="">Tüm türler</option>
+          {collections.map((c) => <option key={c} value={c}>{c}</option>)}
+        </select>
+        <div className="sorts" aria-label="Düzey">
+          {levels.map(([value, label]) => (
+            <button
+              key={value || "all"}
+              className={(state.filter.level ?? "") === value ? "on" : ""}
+              onClick={() => onFilter({ level: value })}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        <div className="sorts" aria-label="Dil">
+          {langs.map(([value, label]) => (
+            <button
+              key={value || "all"}
+              className={(state.filter.lang ?? "") === value ? "on" : ""}
+              onClick={() => onFilter({ lang: value })}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
       </div>
     </div>
   );
@@ -520,7 +576,8 @@ const VERBS: Record<Activity["action"], string> = {
   save: "listeye ekledi",
   unsave: "listeden çıkardı",
   sort: "sıraladı",
-  sync: "dizini güncelledi",
+  filter: "filtreledi",
+  sync: "dizini denetledi",
 };
 
 function FeedRow({ item, agents }: { item: Activity; agents: Agent[] }) {
@@ -537,6 +594,151 @@ function FeedRow({ item, agents }: { item: Activity; agents: Agent[] }) {
       <span className="feed-verb">{VERBS[item.action] ?? item.action}</span>
       <span className="feed-detail">{item.detail}</span>
     </div>
+  );
+}
+
+/** What a result is, in one line of machine data: its collection, revision and level. */
+function metaOf(doc: Doc): string {
+  const parts: string[] = [];
+  if (doc.collection) parts.push(doc.collection);
+  parts.push(`Değ. ${doc.rev}${doc.revDate ? ` · ${dmy(doc.revDate)}` : ""}`);
+  if (doc.level) parts.push(levelLabel(doc.level));
+  return parts.join(" · ");
+}
+
+/** A short warning for a row whose copy the university no longer publishes. */
+function staleLabel(live: Live | null): string | null {
+  switch (live?.status) {
+    case "newer":
+    case "changed":
+      return "güncel değil";
+    case "gone":
+      return "yayından kalkmış";
+    default:
+      return null;
+  }
+}
+
+/**
+ * What the university's own site says about the open document.
+ *
+ * Said before the facts, because it decides whether they can be trusted: an archive is a
+ * snapshot, and the university replaces documents under it.
+ */
+function LiveBanner({ live }: { live: Live | null }) {
+  if (!live) return <p className="live quiet">Resmî sitedeki sürüm soruluyor…</p>;
+  switch (live.status) {
+    case "current":
+      return (
+        <p className="live quiet">
+          Resmî sitede yayımlanan sürüm bu · <span className="data">{when(live.checkedAt)}</span>
+        </p>
+      );
+    case "newer":
+      return (
+        <div className="live stale">
+          <strong>Güncel değil.</strong> Resmî sitede Değ. {live.rev} yayımlanmış; bu arşivdeki
+          metin daha eski.{" "}
+          <a
+            href={live.url}
+            onClick={(e) => {
+              e.preventDefault();
+              void openUrl(live.url);
+            }}
+          >
+            Güncel sürümü aç ↗
+          </a>
+        </div>
+      );
+    case "changed":
+      return (
+        <div className="live stale">
+          <strong>Güncel değil.</strong> Resmî sitedeki dosya {dmy(live.modified)} tarihinde, bu
+          arşivden sonra değişmiş. Güncel metin için dosyayı açın.
+        </div>
+      );
+    case "gone":
+      return (
+        <div className="live stale">
+          <strong>Yayından kalkmış.</strong> Dosya artık yayımlandığı adreste değil; yerine yeni bir
+          sürüm gelmiş olabilir.
+        </div>
+      );
+    default:
+      return <p className="live quiet">Resmî site şu an kontrol edilemedi.</p>;
+  }
+}
+
+/** What must be said about the results before any of them. */
+function NoticeBar({ state }: { state: Snapshot }) {
+  const n = state.notice;
+  const site = siteOf(state.corpus?.source);
+  const link = site && (
+    <a
+      href={site}
+      onClick={(e) => {
+        e.preventDefault();
+        void openUrl(site);
+      }}
+    >
+      {site.replace("https://", "")}
+    </a>
+  );
+  if (n?.kind === "scope") {
+    const what = {
+      calendar: "Akademik takvim, kayıt ve sınav tarihleri",
+      meeting: "Kurulların toplantı günleri",
+      announcement: "Güncel duyurular",
+    }[n.scope];
+    return (
+      <div className="notice">
+        <strong>{what} bu arşivde yok.</strong>{" "}
+        <span>
+          Arşiv, üniversitenin kalite belgelerini kapsar: form, iş akışı, yönerge, yönetmelik.
+          Güncel bilgi için {link ?? "üniversitenin sitesine"} bakın. Aşağıdakiler yalnızca en
+          yakın belgeler; soruyu yanıtlamazlar.
+        </span>
+      </div>
+    );
+  }
+  if (n?.kind === "weak") {
+    return (
+      <div className="notice">
+        <strong>Güçlü bir eşleşme yok.</strong>{" "}
+        <span>
+          Aşağıdakiler en yakın belgeler, kesin yanıt değil. Belge başlığında geçebilecek
+          kelimeleri ya da belge kodunu deneyin.
+        </span>
+      </div>
+    );
+  }
+  if (state.language === "en" && state.query) {
+    return (
+      <div className="notice quiet">
+        <span>
+          İngilizce soru: sözlük ve anlam üzerinden eşleştirildi. Türkçe kelimeler en iyi
+          sonucu verir.
+        </span>
+      </div>
+    );
+  }
+  return null;
+}
+
+/** The last check for a newer archive, beside the button that runs one. */
+function SyncState({ state }: { state: Snapshot }) {
+  const s = state.sync;
+  if (!s || state.syncing) return null;
+  const text =
+    s.outcome === "current"
+      ? `Dizin güncel · ${when(s.checkedAt)}`
+      : s.outcome === "updated"
+        ? `Güncellendi · ${s.built ? dmy(s.built) : ""}`
+        : `Kontrol edilemedi · ${when(s.checkedAt)}`;
+  return (
+    <span className={`sync-state ${s.outcome}`} title={s.error ?? undefined}>
+      {text}
+    </span>
   );
 }
 

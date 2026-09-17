@@ -8,9 +8,9 @@ English, `.docx`, `.xlsx`, `.pdf` and pre-2007 `.doc`/`.xls` alike — indexed s
 search by **what you want to do** rather than by what the document is called.
 
 ```
-gturag search "danışman değiştirmek istiyorum"
-gturag open FR-0083
-gturag get FR-0083          # → the form's full text, for an agent to answer from
+gturag search "yüksek lisansta danışmanımı değiştirmek istiyorum"
+gturag open 1               # a result row, a code (FR-0083, İA-0021, ia-21) or an id
+gturag get İA-0021          # → the full text as Markdown, for an agent to answer from
 ```
 
 Type `FR-0083` and that form wins outright. Type a sentence and it is found by meaning.
@@ -22,9 +22,9 @@ the agent, and both calling the same methods so they cannot drift. What you open
 rides along on your next prompt; what the agent searches for fills your screen.
 
 **The app retrieves; the agent answers.** No language model ships here and none runs on a
-server. The only model involved is a sentence embedder, downloaded once per machine into a
-cache every clapp of this family shares — after that, retrieval is entirely local and works
-offline.
+server. The only model involved is a sentence embedder, downloaded once, on first run, into
+the app's own data directory (a copy already in the shared store at `~/.clatch/shared` is
+read instead) — after that, retrieval is entirely local and works offline.
 
 Retrieval is hybrid, in this order:
 
@@ -55,6 +55,41 @@ word is indexed alongside an ASCII-folded spelling, because the university write
 both ways: `ETUV KULLANIM TALMATI` is a real filename and 874 titles carry no Turkish
 letters at all. The folded form is a matching aid only — never displayed, because
 `Talimati` is a misspelling and we should not be the ones making it.
+
+### Reading the question first
+
+Before anything is scored, the query is read for three things a ranking cannot recover on
+its own (`src-tauri/src/lexicon.rs`):
+
+- **The education level.** `yüksek lisans` is one concept in two words, and one of them is
+  also the undergraduate programme. Read as a level, it lifts graduate documents and lowers
+  undergraduate ones — so a graduate student's excused-registration question finds
+  `YL-DR Mazeretli Kayıt Formu`, not the faculty's undergraduate form that shares more words.
+- **Filler and document-kind words.** `istiyorum`, `öğrencisiyim` carry intent, not topic,
+  and are dropped; `başvuru`, `form`, `dilekçe` say what kind of paper a document is, and
+  weigh half as much as the topic beside them.
+- **Language.** An English question gets the Turkish words of this domain added from a
+  glossary, and is read by meaning as written.
+
+It is also read for what the archive does NOT hold — the academic calendar, meeting days,
+announcements — and both surfaces say so above the results instead of presenting the
+nearest forms as an answer. When nothing matches well, they say that too.
+
+## Is this still the published revision?
+
+The archive is a snapshot, and the university replaces documents under it: when a new
+revision goes up, the old file is taken down. So every result carries what the document
+prints about itself — its revision, the date of that revision, the unit that prepared it —
+read from its own header rather than from the filename, which often has no revision at all.
+
+Opening a document (`open`, `get`, or a click) asks the university's site directly, with a
+HEAD request or two: is the indexed file still there, is a later `R<n>` published, was an
+unmarked file replaced after the archive was built? A copy that is no longer current is
+marked **out of date** in both surfaces, with the address of the current file. Nothing is
+scraped, and an unreachable site is reported as "not checked", never as "current".
+
+`gturag sync` answers the other half — is there a newer archive? — with one of three
+sentences: up to date (with both build dates), updated, or could not check.
 
 ## The repository is the database
 
@@ -99,8 +134,18 @@ clatch agent grant <agent> app:com.breksos.gturag
 git clone --recurse-submodules https://github.com/breksos/gturag-clapp
 cd gturag-clapp
 npm install
-npm run verify        # tests → package → validate → CLI ⇄ GUI round-trip
+npm run verify        # build → package → tests → validate → CLI ⇄ GUI round-trip
 ```
+
+The scripts are the family's, so they mean the same thing in every clapp:
+
+| goal | command |
+|---|---|
+| build the shippable binary | `npm run build` |
+| tests · types · manifest vs code | `npm test` · `npm run typecheck` · `npm run check` |
+| assemble the depot · validate it · pack the host `.clapp` | `npm run package` · `npm run validate` · `npm run pack` |
+| **prove it works** | `npm run verify` |
+| refresh the corpus | `npm run index` then `npm run corpus` |
 
 `clappkit` is carried as a submodule; `git submodule update --remote clappkit` moves it
 forward deliberately.
@@ -145,7 +190,10 @@ arrives only if it is newer than what is loaded.
 Nothing GTÜ-specific is compiled into the engine. The app's identity comes from
 `clatch.json` (read by `build.rs`), the scraper's knowledge of the site lives in
 `tools/build-index/source.py`, and the index tells the app where its updates and document
-texts are. To make `hacettepe-clapp`, or a `hukuk-clapp` over a statute book:
+texts are. The one file that knows the DOMAIN — a university's levels, the filler of a
+student's question, an English glossary, the questions a registry cannot answer — is
+`src-tauri/src/lexicon.rs`; a registry of another kind edits that list and nothing else.
+Collections are the source's own folder names, read from the document URLs. To make `hacettepe-clapp`, or a `hukuk-clapp` over a statute book:
 
 1. Fork. Edit `clatch.json`: `id`, `name`, `connector.cli`, `about`.
 2. Replace `assets/gtu-emblem-source.webp` with the new mark and run `scripts/emblem.py`
@@ -167,8 +215,9 @@ stamped in the header. The one language-specific piece, Turkish `İ`/`ı` foldin
 A release carries only the depots; the index rides inside each one:
 
 ```
-com.breksos.gturag-windows-x64.clapp        binary + icon + manifest + corpus.gtu
-com.breksos.gturag-windows-x64.clapp.sha256
+com.breksos.gturag-macos-arm64.clapp        binary + icon + manifest + corpus.gtu
+com.breksos.gturag-windows-x64.clapp        (each with its .sha256 beside it)
+com.breksos.gturag-linux-x64.clapp
 ```
 
 Push a `v*` tag and `release.yml` builds one per platform. It needs no repository secret and

@@ -13,10 +13,14 @@
 //!   itself (PLAYBOOK, field notes).
 
 use crate::corpus::Corpus;
-use crate::index::{self, Hit, Index, Sort};
+use crate::index::{self, Confidence, Filter, Hit, Index, Sort};
+use crate::lexicon::{self, Scope};
+use crate::live::Live;
+use crate::meta::{self, Meta};
+use crate::util::iso_to_dmy;
 use clappkit::{AgentRow, Emit};
 use serde_json::{json, Value};
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 
 /// How many results a page holds. This belongs to the SHARED state, not to the caller's
 /// `-n`: the moment an agent asking for 1 result repaginates the human's window to one row,
@@ -74,6 +78,57 @@ impl By {
     }
 }
 
+/// Below both of these, the best evidence is too weak to call the results an answer: no title
+/// carries a third of the question, and no passage is semantically close. Measured on the
+/// real corpus with multilingual-e5-small, where unrelated passages still score ~0.8.
+const WEAK_TITLE: f32 = 0.40;
+const WEAK_DENSE: f32 = 0.88;
+
+/// Something both surfaces must say ABOUT the results, before any of them.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+pub enum Notice {
+    /// The question is about something this archive does not hold.
+    Scope { scope: Scope },
+    /// Nothing matched well: the results are the nearest documents, not an answer.
+    Weak,
+}
+
+/// What the last `sync` found. Kept, and shown, because "ready" after a sync reads as "you
+/// have the newest", which is a claim only a completed check can make.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncInfo {
+    pub checked_at: String,
+    pub outcome: SyncOutcome,
+    /// The build of the index in use after the check.
+    pub built: Option<String>,
+    /// The build the update address offered, when it could be read.
+    pub remote_built: Option<String>,
+    pub error: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SyncOutcome {
+    /// Nothing newer is published.
+    Current,
+    /// A newer index was installed.
+    Updated,
+    /// The check could not be completed.
+    Failed,
+}
+
+/// What `save` did, so a surface can say it rather than print a count.
+#[derive(Debug)]
+pub struct Saved {
+    pub emits: Vec<Emit>,
+    pub id: String,
+    pub label: String,
+    /// It was already in the list; nothing changed.
+    pub already: bool,
+}
+
 /// How far along one provisioned artifact is. This is state the human WATCHES, so it is
 /// modelled as a value with a reason attached, not as a bare bool — "not ready" and
 /// "failed because the disk is full" are different sentences.
@@ -82,6 +137,8 @@ impl By {
 pub enum Stage {
     #[default]
     Missing,
+    /// On disk and being loaded into memory — the first search after launch waits for this.
+    Loading,
     Downloading {
         /// 0–100. Whole percent: this drives a progress bar, not a benchmark.
         percent: u8,
@@ -119,6 +176,7 @@ impl Provision {
                 format!("provisioning failed: {reason}")
             }
             (Stage::Downloading { percent }, _) => format!("downloading the model — {percent}%"),
+            (Stage::Loading, _) => "loading the search model — searches are lexical until it is ready".into(),
             (_, Stage::Downloading { percent }) => format!("downloading the index — {percent}%"),
             _ => "not provisioned yet — run `gturag sync`".into(),
         }
@@ -130,12 +188,19 @@ impl Provision {
 pub struct AppState {
     corpus: Option<Corpus>,
     index: Option<Index>,
+    /// What each document says about itself, in corpus order.
+    meta: Vec<Meta>,
     pub provision: Provision,
 
     /// What was last searched for, by either surface. Empty means nothing yet.
     query: String,
     results: Vec<Hit>,
     sort: Sort,
+    filter: Filter,
+    /// What must be said about the results on screen, if anything.
+    notice: Option<Notice>,
+    /// The query on screen was read as English.
+    english: bool,
     /// Index into `corpus.docs` of the form on screen.
     open: Option<usize>,
     /// Document ids the human is collecting for the task at hand. Ids, not indexes:
@@ -157,6 +222,14 @@ pub struct AppState {
     /// A search is in flight. Both surfaces show it, so neither is left wondering whether
     /// anything is happening.
     searching: bool,
+
+    /// What the university's site said about a document, by id. Filled by the app layer,
+    /// which is the only part that talks to the network.
+    live: HashMap<String, Live>,
+    /// The last `sync`.
+    sync: Option<SyncInfo>,
+    /// A `sync` is in flight.
+    pub syncing: bool,
 }
 
 /// An agent id resolved against the roster. Done HERE rather than in the window so the CLI
@@ -173,19 +246,83 @@ fn name_for(agents: &[AgentRow], id: &str) -> String {
 impl AppState {
     /// Attach a freshly loaded corpus and build its lexical index. Called by provisioning;
     /// the state itself never reads a file.
+    ///
+    /// The results are cleared, because they were positions in the old corpus; the caller
+    /// re-runs the query, which needs a fresh query vector this module cannot make. The open
+    /// form is re-found by its ID: a position is meaningless in a new corpus, but the same
+    /// form is still the same form.
     pub fn attach(&mut self, corpus: Corpus) {
-        self.index = Some(Index::build(&corpus));
+        let open_id = self.open_doc().map(|d| d.id.clone());
+        self.meta = meta::derive(&corpus);
+        self.index = Some(Index::build(&corpus, &self.meta));
+        self.open = open_id.and_then(|id| corpus.docs().iter().position(|d| d.id == id));
         self.corpus = Some(corpus);
-        // A previously open document was an index into the OLD corpus. Dropping it is the
-        // honest move: keeping the number would silently point at a different form.
-        self.open = None;
         self.results.clear();
+        // A site check describes one revision of one document, and the corpus just changed.
+        self.live.clear();
+    }
+
+    pub fn meta(&self, i: usize) -> Option<&Meta> {
+        self.meta.get(i)
+    }
+
+    pub fn filter(&self) -> &Filter {
+        &self.filter
+    }
+
+    pub fn set_live(&mut self, id: &str, live: Live) {
+        self.live.insert(id.to_string(), live);
+    }
+
+    pub fn live(&self, id: &str) -> Option<&Live> {
+        self.live.get(id)
+    }
+
+    pub fn set_sync(&mut self, info: SyncInfo) {
+        self.sync = Some(info);
+    }
+
+    /// The ids of the first `n` results, for the app to check against the site.
+    pub fn top_ids(&self, n: usize) -> Vec<String> {
+        let Some(c) = self.corpus.as_ref() else { return Vec::new() };
+        self.results.iter().take(n).map(|h| c.docs()[h.doc].id.clone()).collect()
+    }
+
+    /// What `open`, `get`, `save` and `unsave` take: the row number of a result on screen,
+    /// an id, or a code however it is typed. A number is a row only when that row exists,
+    /// so `open 83` with 25 rows still means FR-0083.
+    pub fn resolve(&self, needle: &str) -> Result<usize, String> {
+        let corpus = self.corpus.as_ref().ok_or_else(|| self.not_ready())?;
+        let n = needle.trim();
+        if let Some(row) = row_number(n) {
+            if let Some(hit) = self.results.get(row - 1) {
+                return Ok(hit.doc);
+            }
+            if self.results.is_empty() && index::resolve(corpus, n).is_none() {
+                return Err(format!("there are no results to take row {row} from — search first"));
+            }
+        }
+        index::resolve(corpus, n).map(|(i, _)| i).ok_or_else(|| self.not_found(n))
+    }
+
+    fn not_found(&self, needle: &str) -> String {
+        let (built, source) = self
+            .corpus
+            .as_ref()
+            .map(|c| (iso_to_dmy(&c.header.built), c.header.source.clone()))
+            .unwrap_or_default();
+        format!(
+            "no document matches `{needle}` in this archive (built {built}). A document newer than \
+             that is not in it yet: `gturag sync` checks for a newer archive, and the official \
+             lists are at {source}. To look by topic: `gturag search <what you want to do>`"
+        )
     }
 
     pub fn corpus(&self) -> Option<&Corpus> {
         self.corpus.as_ref()
     }
 
+    #[cfg(test)]
     pub fn sort(&self) -> Sort {
         self.sort
     }
@@ -194,6 +331,7 @@ impl AppState {
         &self.query
     }
 
+    #[cfg(test)]
     pub fn saved_ids(&self) -> &[String] {
         &self.saved
     }
@@ -215,6 +353,7 @@ impl AppState {
     }
 
     /// The shared log, oldest first.
+    #[cfg(test)]
     pub fn activity(&self) -> &VecDeque<Activity> {
         &self.activity
     }
@@ -245,12 +384,7 @@ impl AppState {
         self.query = query.trim().to_string();
         self.searched_by = by.actor();
         self.searching = false;
-        self.results = match (&self.index, &self.corpus) {
-            (Some(idx), Some(c)) if !self.query.is_empty() => {
-                idx.search(c, &self.query, query_vec, self.sort, PAGE)
-            }
-            _ => Vec::new(),
-        };
+        self.run_query(query_vec);
         // A search that lands on exactly one named form opens it: the user typed a name,
         // and making them click the single row they already identified is ceremony.
         if self.results.len() == 1 && self.results[0].why == index::Why::Code {
@@ -262,12 +396,53 @@ impl AppState {
         Vec::new()
     }
 
+    /// Run the query on screen again — after a new corpus, or once the search model has
+    /// loaded — without recording it as anyone's action: nobody searched, the evidence
+    /// changed.
+    pub fn refresh(&mut self, query_vec: Option<&[f32]>) {
+        if !self.query.is_empty() {
+            self.run_query(query_vec);
+        }
+    }
+
+    fn run_query(&mut self, query_vec: Option<&[f32]>) {
+        let analysis = lexicon::analyze(&self.query);
+        let (results, confidence) = match (&self.index, &self.corpus) {
+            (Some(idx), Some(c)) if !self.query.is_empty() => {
+                idx.search(c, &self.query, &analysis, query_vec, self.sort, &self.filter, PAGE)
+            }
+            _ => (Vec::new(), Confidence::default()),
+        };
+        if std::env::var_os("GTURAG_DEBUG_RANK").is_some() {
+            eprintln!(
+                "rank: {:?} lexical={:?} level={:?} title={:.3} strict={:.3} dense={:?} top={:?}",
+                self.query,
+                analysis.lexical,
+                analysis.level,
+                confidence.title,
+                confidence.strict,
+                confidence.dense,
+                self.corpus.as_ref().and_then(|c| results.first().map(|h| c.docs()[h.doc].id.clone()))
+            );
+        }
+        self.results = results;
+        self.english = analysis.english;
+        self.notice = if self.query.is_empty() {
+            None
+        } else if let Some(scope) = analysis.scope {
+            Some(Notice::Scope { scope })
+        } else if is_weak(&confidence, &self.results) {
+            Some(Notice::Weak)
+        } else {
+            None
+        };
+    }
+
     /// Open one document by id or form code. Returns `Err` with a sentence the agent can
     /// act on, never a silent no-op.
     pub fn open(&mut self, needle: &str, by: &By) -> Result<Vec<Emit>, String> {
-        let corpus = self.corpus.as_ref().ok_or_else(|| self.not_ready())?;
-        let (i, doc) = index::resolve(corpus, needle)
-            .ok_or_else(|| format!("no form matches `{needle}` — try `gturag search {needle}`"))?;
+        let i = self.resolve(needle)?;
+        let doc = &self.corpus.as_ref().expect("resolve succeeded").docs()[i];
         let payload = json!({
             "id": doc.id, "code": doc.code, "title": doc.title,
             "lang": doc.lang, "url": doc.url,
@@ -291,32 +466,33 @@ impl AppState {
 
     /// Add a form to the shared saved list. Idempotent: saving twice is not an error, it
     /// is the same list, and an agent retrying must not double a row.
-    pub fn save(&mut self, needle: &str, by: &By) -> Result<Vec<Emit>, String> {
-        let corpus = self.corpus.as_ref().ok_or_else(|| self.not_ready())?;
-        let (_, doc) = index::resolve(corpus, needle)
-            .ok_or_else(|| format!("no form matches `{needle}`"))?;
-        if self.saved.contains(&doc.id) {
-            return Ok(Vec::new());
-        }
+    pub fn save(&mut self, needle: &str, by: &By) -> Result<Saved, String> {
+        let i = self.resolve(needle)?;
+        let doc = &self.corpus.as_ref().expect("resolve succeeded").docs()[i];
         let id = doc.id.clone();
-        let label = format!("{} {}", doc.code.clone().unwrap_or_default(), doc.title);
+        let label = format!("{} {}", doc.code.clone().unwrap_or_default(), doc.title).trim().to_string();
+        if self.saved.contains(&id) {
+            return Ok(Saved { emits: Vec::new(), id, label, already: true });
+        }
         self.saved.push(id.clone());
-        self.note(by, "save", label.trim());
-        Ok(self.saved_changed(by, "saved", &id))
+        self.note(by, "save", label.clone());
+        let emits = self.saved_changed(by, "saved", &id);
+        Ok(Saved { emits, id, label, already: false })
     }
 
-    pub fn unsave(&mut self, needle: &str, by: &By) -> Result<Vec<Emit>, String> {
-        let corpus = self.corpus.as_ref().ok_or_else(|| self.not_ready())?;
-        let (_, doc) = index::resolve(corpus, needle)
-            .ok_or_else(|| format!("no form matches `{needle}`"))?;
+    pub fn unsave(&mut self, needle: &str, by: &By) -> Result<Saved, String> {
+        let i = self.resolve(needle)?;
+        let doc = &self.corpus.as_ref().expect("resolve succeeded").docs()[i];
         let id = doc.id.clone();
+        let label = format!("{} {}", doc.code.clone().unwrap_or_default(), doc.title).trim().to_string();
         let before = self.saved.len();
         self.saved.retain(|s| *s != id);
         if self.saved.len() == before {
-            return Err(format!("`{id}` is not in the saved list"));
+            return Err(format!("`{label}` is not in the saved list"));
         }
-        self.note(by, "unsave", id.clone());
-        Ok(self.saved_changed(by, "removed", &id))
+        self.note(by, "unsave", label.clone());
+        let emits = self.saved_changed(by, "removed", &id);
+        Ok(Saved { emits, id, label, already: false })
     }
 
     fn saved_changed(&self, by: &By, what: &str, id: &str) -> Vec<Emit> {
@@ -342,6 +518,25 @@ impl AppState {
         emits
     }
 
+    /// Set the filter without searching: a search that carries its own filter applies it
+    /// first and then runs once.
+    pub fn put_filter(&mut self, filter: Filter, by: &By) {
+        if self.filter != filter {
+            self.filter = filter;
+            let d = describe_filter(&self.filter);
+            self.note(by, "filter", d);
+        }
+    }
+
+    /// Narrow the results. State, like the sort, so it re-runs the search for both surfaces.
+    pub fn set_filter(&mut self, filter: Filter, query_vec: Option<&[f32]>, by: &By) -> Vec<Emit> {
+        self.filter = filter;
+        let q = self.query.clone();
+        let emits = self.search(&q, query_vec, by);
+        self.note(by, "filter", describe_filter(&self.filter));
+        emits
+    }
+
     fn not_ready(&self) -> String {
         format!("the form index is not loaded — {}", self.provision.summary())
     }
@@ -349,10 +544,20 @@ impl AppState {
     /// One document, as both surfaces render it.
     fn doc_json(&self, i: usize, hit: Option<&Hit>) -> Value {
         let d = &self.corpus.as_ref().unwrap().docs()[i];
+        let m = self.meta.get(i).cloned().unwrap_or_default();
         json!({
             "id": d.id,
             "code": d.code,
-            "rev": d.rev,
+            // The revision the document prints about itself; the filename's is kept beside it.
+            "rev": m.rev,
+            "revName": d.rev,
+            "revDate": m.rev_date,
+            "pubDate": m.pub_date,
+            "unit": m.unit,
+            "collection": m.collection,
+            "level": m.level,
+            "live": self.live.get(&d.id),
+            "liveText": self.live.get(&d.id).map(Live::sentence),
             "lang": d.lang,
             "title": d.title,
             "name": d.name,
@@ -393,6 +598,10 @@ impl AppState {
             None => Vec::new(),
         };
 
+        let mut collections: Vec<&str> = self.meta.iter().filter_map(|m| m.collection.as_deref()).collect();
+        collections.sort_unstable();
+        collections.dedup();
+
         // One sentence describing what is on screen, built once so both surfaces say the
         // same thing about the same state.
         let title = if self.query.is_empty() {
@@ -416,10 +625,14 @@ impl AppState {
             // that would miss `danışman` inside a query for `danışmanımı`.
             "terms": index::tokenize(&self.query),
             "sort": self.sort.as_str(),
+            "filter": self.filter,
+            "notice": self.notice,
+            "language": if self.english { "en" } else { "tr" },
             "results": results,
             "total": self.results.len(),
             "page": PAGE,
-            "open": self.open.map(|i| self.doc_json(i, None)),
+            // The open form carries its matched passages when it is one of the results.
+            "open": self.open.map(|i| self.doc_json(i, self.results.iter().find(|h| h.doc == i))),
             "saved": saved,
             "provision": {
                 "model": self.provision.model,
@@ -433,7 +646,11 @@ impl AppState {
                 "built": c.header.built,
                 "source": c.header.source,
                 "updateUrl": c.header.update_url,
+                // What the window's type filter offers: every collection the corpus has.
+                "collections": collections,
             })),
+            "sync": self.sync,
+            "syncing": self.syncing,
             "agents": self.agents,
             // Who did what, newest last. Each row carries the resolved name as well as the
             // id, so the window and the terminal label it identically.
@@ -446,6 +663,34 @@ impl AppState {
             })).collect::<Vec<_>>(),
         })
     }
+}
+
+/// A result row number as a person types it: 1–99, never with a leading zero (`0083` is a
+/// form number).
+fn row_number(s: &str) -> Option<usize> {
+    let plain = !s.is_empty() && s.len() <= 2 && !s.starts_with('0') && s.bytes().all(|b| b.is_ascii_digit());
+    plain.then(|| s.parse().ok()).flatten()
+}
+
+fn is_weak(c: &Confidence, results: &[Hit]) -> bool {
+    !results.is_empty()
+        && results.iter().all(|h| h.why != index::Why::Code)
+        && c.strict < WEAK_TITLE
+        && c.dense.map_or(true, |d| d < WEAK_DENSE)
+}
+
+pub fn describe_filter(f: &Filter) -> String {
+    let mut parts = Vec::new();
+    if let Some(t) = &f.collection {
+        parts.push(format!("type={t}"));
+    }
+    if let Some(l) = f.level {
+        parts.push(format!("level={}", l.label()));
+    }
+    if let Some(l) = &f.lang {
+        parts.push(format!("lang={l}"));
+    }
+    if parts.is_empty() { "none".into() } else { parts.join(" ") }
 }
 
 #[cfg(test)]
@@ -516,11 +761,15 @@ mod tests {
     fn saving_signals_as_context_and_is_idempotent() {
         let mut s = state();
         let first = s.save("FR-0083", &By::Human).unwrap();
-        assert_eq!(first.len(), 1);
-        assert_eq!(first[0].id, "saved.changed");
-        // A retry must not double the row, nor announce a change that did not happen.
+        assert_eq!(first.emits.len(), 1);
+        assert_eq!(first.emits[0].id, "saved.changed");
+        assert!(!first.already);
+        // A retry must not double the row, nor announce a change that did not happen — and
+        // it says so, rather than repeating the count as if something had been saved.
         let again = s.save("FR-0083", &By::Human).unwrap();
-        assert!(again.is_empty());
+        assert!(again.emits.is_empty());
+        assert!(again.already);
+        assert_eq!(again.id, "FR-0083.tr");
         assert_eq!(s.saved_ids().len(), 1);
     }
 
@@ -535,8 +784,9 @@ mod tests {
     fn an_unknown_form_is_refused_with_a_next_step() {
         let mut s = state();
         let err = s.open("FR-9999", &By::Human).unwrap_err();
-        assert!(err.contains("no form matches"), "{err}");
+        assert!(err.contains("no document matches `FR-9999`"), "{err}");
         assert!(err.contains("search"), "the refusal must point somewhere: {err}");
+        assert!(err.contains("sync") && err.contains("https://example.invalid"), "and say where else to look: {err}");
     }
 
     #[test]
@@ -554,15 +804,59 @@ mod tests {
     }
 
     #[test]
-    fn a_new_corpus_drops_the_open_document_rather_than_repointing_it() {
-        // An index is meaningless across a re-provision; keeping the number would show a
-        // different form under the same heading.
+    fn a_new_corpus_keeps_the_open_form_by_id_not_by_position() {
+        // A position is meaningless across a re-provision: keeping the number would show a
+        // different form under the same heading. The id is what survives.
         let mut s = state();
-        s.open("FR-0083", &By::Human).unwrap();
-        assert!(s.open_doc().is_some());
-        let fresh = state();
-        s.attach(fresh.corpus.unwrap());
-        assert!(s.open_doc().is_none());
+        s.open("FR-0336", &By::Human).unwrap();
+        let mut fresh = state().corpus.unwrap();
+        fresh.header.docs.reverse();
+        for c in fresh.header.chunks.iter_mut() {
+            c.doc = 1 - c.doc;
+        }
+        s.attach(fresh);
+        assert_eq!(s.open_doc().map(|d| d.id.as_str()), Some("FR-0336.tr"), "same form, new position");
+
+        let mut without = state().corpus.unwrap();
+        without.header.docs.truncate(1);
+        without.header.chunks.truncate(1);
+        s.attach(without);
+        assert!(s.open_doc().is_none(), "a form the new corpus lacks is closed, not repointed");
+    }
+
+    #[test]
+    fn a_row_number_picks_from_the_results_on_screen() {
+        let mut s = state();
+        let err = s.open("1", &By::Human).unwrap_err();
+        assert!(err.contains("search first"), "{err}");
+        s.search("staj", None, &By::Human);
+        let first = s.results[0].doc;
+        s.open("1", &By::Human).unwrap();
+        assert_eq!(s.open, Some(first));
+        assert!(s.save("1", &By::Human).is_ok());
+        // Past the rows on screen, a number is a form number again.
+        assert_eq!(s.resolve("83").ok(), s.resolve("FR-0083").ok());
+    }
+
+    #[test]
+    fn an_out_of_scope_question_is_flagged_before_its_results() {
+        let mut s = state();
+        s.search("2026 güz akademik takvim ders kayıt tarihleri", None, &By::Human);
+        assert_eq!(s.snapshot()["notice"]["kind"], "scope");
+        assert_eq!(s.snapshot()["notice"]["scope"], "calendar");
+        s.search("danışman değişikliği", None, &By::Human);
+        assert!(s.snapshot()["notice"].is_null(), "a good match needs no warning");
+    }
+
+    #[test]
+    fn a_filter_is_shared_state_and_re_runs_the_search() {
+        let mut s = state();
+        s.search("formu belgesi", None, &By::Human);
+        let f = Filter { level: Some(meta::Level::Lisansustu), ..Filter::default() };
+        s.set_filter(f.clone(), None, &By::Human);
+        assert_eq!(s.filter(), &f);
+        assert_eq!(s.snapshot()["filter"]["level"], "lisansustu");
+        assert_eq!(s.activity().back().unwrap().action, "filter");
     }
 
     /// The half of the loop that was missing: both surfaces act on one state, and now the
